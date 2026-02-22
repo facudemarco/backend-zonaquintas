@@ -30,16 +30,14 @@ def ensure_wallet_table_exists():
 # Execute the table creation when the router is loaded
 ensure_wallet_table_exists()
 
-@router.get("/dashboard", tags=["Wallet"])
-async def get_wallet_dashboard(current_user: str = Depends(get_current_user)):
+@router.get("/dashboard/{owner_id}", tags=["Wallet"])
+async def get_wallet_dashboard(owner_id: str):
     """
     Entrega el listado de balances proyectado en base al motor transaccional
     y las últimas transacciones para renderizar en el panel de control del dueño.
     """
     try:
         with engine.begin() as conn:
-            # En un sistema real extraeriamos todas las trasancciones filtradas por owner_id
-            # current_user será el user_id.
             
             # Fetch all transactions with quinta titles mapped for this user
             result = conn.execute(
@@ -50,7 +48,7 @@ async def get_wallet_dashboard(current_user: str = Depends(get_current_user)):
                     WHERE t.owner_id = :owner_id 
                     ORDER BY t.created_at DESC
                 """),
-                {"owner_id": current_user}
+                {"owner_id": owner_id}
             )
             transactions = result.mappings().all()
 
@@ -101,10 +99,7 @@ async def get_wallet_dashboard(current_user: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/transactions", tags=["Wallet"])
-async def create_transaction(
-    data: TransactionCreate, 
-    current_user: str = Depends(get_current_user) # Idealmente solo admin puede crear esto (Ej. una validación)
-):
+async def create_transaction(data: TransactionCreate):
     """Crea una nueva retención vinculada a una reserva"""
     try:
         tx_id = str(uuid.uuid4())
@@ -134,8 +129,7 @@ async def create_transaction(
 @router.patch("/transactions/{transaction_id}/status", tags=["Wallet"])
 async def update_transaction_status(
     transaction_id: str, 
-    data: TransactionStatusUpdate,
-    current_user: str = Depends(get_current_user) # Only admins should do this
+    data: TransactionStatusUpdate
 ):
     """Actualiza manual y explícitamente el estado de un bloque de dinero"""
     try:
@@ -152,10 +146,7 @@ async def update_transaction_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/payout/{owner_id}", tags=["Wallet"])
-async def trigger_manual_payout(
-    owner_id: str,
-    current_user: str = Depends(get_current_user) 
-):
+async def trigger_manual_payout(owner_id: str):
     """
     Libera todos los fondos 'DISPONIBLE' de un Propietario a 'ENTREGADO'.
     Este botón se aprieta cuando Admin deposita en la cuenta de dicho dueño.

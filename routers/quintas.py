@@ -56,10 +56,7 @@ def save_image_to_disk(upload_file: UploadFile) -> str:
     return f"{DOMAIN_URL}/{fname}"
 
 @router.post("/quintas", tags=["Quintas"])
-async def create_quinta(
-    data: QuintaCreate,
-    current_user: str = Depends(get_current_user),
-):
+async def create_quinta(data: QuintaCreate):
     try:
         quinta_id = str(uuid.uuid4())
 
@@ -91,7 +88,6 @@ async def upload_quinta_images(
     quinta_id: str,
     main_image: UploadFile = File(...),
     images: Optional[List[UploadFile]] = File(None),
-    current_user: str = Depends(get_current_user),
 ):
     try:
         # Check if quinta exists
@@ -229,7 +225,6 @@ async def delete_quinta(quinta_id: str):
 async def update_quinta(
     quinta_id: str,
     data: QuintaUpdate,
-    current_user: str = Depends(get_current_user),
 ):
     try:
         with engine.begin() as conn:
@@ -302,7 +297,6 @@ async def update_quinta_images(
     quinta_id: str,
     main_image: Optional[UploadFile] = File(None),
     images: Optional[List[UploadFile]] = File(None),
-    current_user: str = Depends(get_current_user),
 ):
     try:
         with engine.begin() as conn:
