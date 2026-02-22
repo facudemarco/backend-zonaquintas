@@ -7,3 +7,15 @@ __pycache__/
 
 # virtual environment
 venv/
+
+# Docker
+docker-compose.yml
+
+# Test
+tests/
+pytest_output.txt
+test-results.txt
+frontend-integration-guide.md
+
+# Images dir
+images/

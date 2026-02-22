@@ -13,13 +13,7 @@ from utils.security import get_current_user
 router = APIRouter()
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-IS_PROD = os.getenv("ENV") == "production"
-if IS_PROD:
-    IMAGES_DIR = "/home/iweb/zonaquintas/data/images"
-else:
-    IMAGES_DIR = os.path.join(PROJECT_ROOT, "images")
-    
+IMAGES_DIR = os.path.join(PROJECT_ROOT, "images")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "https://zonaquintas.com/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api/images")
 
 def save_image_to_disk(upload_file: UploadFile) -> str:
