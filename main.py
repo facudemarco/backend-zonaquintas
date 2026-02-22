@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import quintas
+from routers import quintas, auth, wallet
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from fastapi.staticfiles import StaticFiles
@@ -8,7 +8,7 @@ app = FastAPI(root_path="/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api")
 
 origins = [
     "http://localhost",
-    "http://localhost:3000",
+    "http://localhost:3009",
     "https://zonaquintas.com",
     "https://www.zonaquintas.com",
     "http://zonaquintas.com",
@@ -34,4 +34,6 @@ print(IS_PROD)
 async def root():
     return {"message": "API Zona Quintas by iWeb Technology. 2025 All rights reserved."}
 
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(quintas.router, prefix="/quintas", tags=["quintas"])
+app.include_router(wallet.router, prefix="/wallet", tags=["wallet"])
