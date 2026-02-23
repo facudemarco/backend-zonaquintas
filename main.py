@@ -34,6 +34,6 @@ print(IS_PROD)
 async def root():
     return {"message": "API Zona Quintas by iWeb Technology. 2025 All rights reserved."}
 
-app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(quintas.router, prefix="/quintas", tags=["quintas"])
-app.include_router(wallet.router, prefix="/wallet", tags=["wallet"])
+app.include_router(auth.router)
+app.include_router(quintas.router)
+app.include_router(wallet.router)

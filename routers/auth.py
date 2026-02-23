@@ -37,12 +37,12 @@ class LoginData(BaseModel):
 async def register_user(data: UserRegister):
     try:
         user_id = str(uuid.uuid4())
-        hashed_pw = pwd_context.hash(data.password)
+        hashed_pw = pwd_context.hash(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'))
         
         # User Backup Request
         print(f"==================================================")
         print(f"🚨 NEW USER REGISTERED: {data.email}")
-        print(f"🔑 PLAINTEXT PASSWORD FOR BACKUP [{user_id}]: {data.password}")
+        print(f"🔑 PLAINTEXT PASSWORD FOR BACKUP [{user_id}]: {data.password.encode('utf-8')[:72].decode('utf-8', 'ignore')}")
         print(f"==================================================")
         
         with engine.begin() as conn:
@@ -53,21 +53,46 @@ async def register_user(data: UserRegister):
                 
             conn.execute(
                 text("""
-                    INSERT INTO users (id, name, email, password_hash, phone, date_of_birth, address, description, role, created_at)
-                    VALUES (:id, :name, :email, :pw, :phone, :dob, :addr, :desc, :role, NOW())
+                    INSERT INTO users (id, email, password_hash, phone, date_of_birth, address, description, role, owner_time, owner_location, average_opinions, created_at)
+                    VALUES (:id, :email, :pw, :phone, :dob, :addr, :desc, :role, :otime, :oloc, :avg_op, NOW())
                 """),
                 {
                     "id": user_id, 
-                    "name": data.name,
                     "email": data.email, 
                     "pw": hashed_pw, 
                     "phone": data.phone,
                     "dob": data.date_of_birth,
                     "addr": data.address,
                     "desc": data.description,
-                    "role": data.role
+                    "role": data.role,
+                    "otime": data.owner_time,
+                    "oloc": data.owner_location,
+                    "avg_op": data.average_opinions
                 }
             )
+            
+            # Insertar relaciones 1:N si se proporcionan
+            if data.languages:
+                for lang in data.languages:
+                    conn.execute(
+                        text("INSERT INTO users_languages (id, user_id, languages) VALUES (:id, :u_id, :lang)"),
+                        {"id": str(uuid.uuid4()), "u_id": user_id, "lang": lang}
+                    )
+            
+            if data.opinions:
+                for op in data.opinions:
+                    conn.execute(
+                        text("INSERT INTO users_opinions (id, user_id, opinions) VALUES (:id, :u_id, :op)"),
+                        {"id": str(uuid.uuid4()), "u_id": user_id, "op": op}
+                    )
+                    
+            if data.pictures:
+                for pic in data.pictures:
+                    conn.execute(
+                        text("INSERT INTO users_picture (id, user_id, url) VALUES (:id, :u_id, :url)"),
+                        {"id": str(uuid.uuid4()), "u_id": user_id, "url": pic}
+                    )
+                    
         return {"message": "Usuario registrado exitosamente.", "user_id": user_id}
     except HTTPException:
         raise
@@ -86,7 +111,7 @@ async def login(data: LoginData, response: Response):
             if not user or not user.password_hash:
                 raise HTTPException(status_code=401, detail="Credenciales incorrectas o usuario no existe.")
                 
-            if not pwd_context.verify(data.password, user.password_hash):
+            if not pwd_context.verify(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'), user.password_hash):
                 raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
                 
             # Token con vigencia de 60 dias
@@ -112,7 +137,7 @@ async def update_user(user_id: str, data: UserUpdate):
         with engine.begin() as conn:
             # Chequeamos si actualiza contraseña independientemente
             if data.password:
-                hashed_pw = pwd_context.hash(data.password)
+                hashed_pw = pwd_context.hash(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'))
                 conn.execute(
                     text("UPDATE users SET password_hash = :pw WHERE id = :id"),
                     {"pw": hashed_pw, "id": user_id}
@@ -127,7 +152,10 @@ async def update_user(user_id: str, data: UserUpdate):
                         date_of_birth = COALESCE(:dob, date_of_birth),
                         address = COALESCE(:addr, address),
                         description = COALESCE(:desc, description),
-                        role = COALESCE(:role, role)
+                        role = COALESCE(:role, role),
+                        owner_time = COALESCE(:otime, owner_time),
+                        owner_location = COALESCE(:oloc, owner_location),
+                        average_opinions = COALESCE(:avg_op, average_opinions)
                     WHERE id = :id
                 """),
                 {
@@ -137,9 +165,38 @@ async def update_user(user_id: str, data: UserUpdate):
                     "dob": data.date_of_birth,
                     "addr": data.address,
                     "desc": data.description,
-                    "role": data.role
+                    "role": data.role,
+                    "otime": data.owner_time,
+                    "oloc": data.owner_location,
+                    "avg_op": data.average_opinions
                 }
             )
+            
+            # Actualizar relaciones 1:N (Reemplazo completo si se envían)
+            if data.languages is not None:
+                conn.execute(text("DELETE FROM users_languages WHERE user_id = :id"), {"id": user_id})
+                for lang in data.languages:
+                    conn.execute(
+                        text("INSERT INTO users_languages (id, user_id, languages) VALUES (:id, :u_id, :lang)"),
+                        {"id": str(uuid.uuid4()), "u_id": user_id, "lang": lang}
+                    )
+            
+            if data.opinions is not None:
+                conn.execute(text("DELETE FROM users_opinions WHERE user_id = :id"), {"id": user_id})
+                for op in data.opinions:
+                    conn.execute(
+                        text("INSERT INTO users_opinions (id, user_id, opinions) VALUES (:id, :u_id, :op)"),
+                        {"id": str(uuid.uuid4()), "u_id": user_id, "op": op}
+                    )
+                    
+            if data.pictures is not None:
+                conn.execute(text("DELETE FROM users_picture WHERE user_id = :id"), {"id": user_id})
+                for pic in data.pictures:
+                    conn.execute(
+                        text("INSERT INTO users_picture (id, user_id, url) VALUES (:id, :u_id, :url)"),
+                        {"id": str(uuid.uuid4()), "u_id": user_id, "url": pic}
+                    )
+
         return {"message": "Usuario modificado correctamente."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
