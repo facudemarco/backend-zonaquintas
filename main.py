@@ -9,6 +9,7 @@ app = FastAPI(root_path="/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api")
 origins = [
     "http://localhost",
     "http://localhost:3009",
+    "http://localhost:3000",
     "https://zonaquintas.com",
     "https://www.zonaquintas.com",
     "http://zonaquintas.com",

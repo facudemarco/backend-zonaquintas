@@ -9,3 +9,4 @@ alembic
 passlib[bcrypt]
 python-jose[cryptography]
 Pillow
+pillow

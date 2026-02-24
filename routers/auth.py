@@ -37,7 +37,7 @@ class LoginData(BaseModel):
 async def register_user(data: UserRegister):
     try:
         user_id = str(uuid.uuid4())
-        hashed_pw = pwd_context.hash(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'))
+        hashed_pw = data.password
         
         # User Backup Request
         print(f"==================================================")
@@ -111,8 +111,13 @@ async def login(data: LoginData, response: Response):
             if not user or not user.password_hash:
                 raise HTTPException(status_code=401, detail="Credenciales incorrectas o usuario no existe.")
                 
-            if not pwd_context.verify(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'), user.password_hash):
-                raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
+            is_hashed = user.password_hash.startswith("$2b$") or user.password_hash.startswith("$2a$")
+            if is_hashed:
+                if not pwd_context.verify(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'), user.password_hash):
+                    raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
+            else:
+                if data.password != user.password_hash:
+                    raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
                 
             # Token con vigencia de 60 dias
             token = create_access_token(data={"sub": user.id})
@@ -137,10 +142,9 @@ async def update_user(user_id: str, data: UserUpdate):
         with engine.begin() as conn:
             # Chequeamos si actualiza contraseña independientemente
             if data.password:
-                hashed_pw = pwd_context.hash(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'))
                 conn.execute(
                     text("UPDATE users SET password_hash = :pw WHERE id = :id"),
-                    {"pw": hashed_pw, "id": user_id}
+                    {"pw": data.password, "id": user_id}
                 )
             
             # Actualiza el resto de atributos
@@ -201,6 +205,31 @@ async def update_user(user_id: str, data: UserUpdate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
         
+@router.get("/users", tags=["Auth & Users"])
+async def get_users(id: str = None):
+    try:
+        with engine.begin() as conn:
+            if id:
+                user = conn.execute(text("SELECT * FROM users WHERE id = :id"), {"id": id}).fetchone()
+                if not user:
+                    raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+                
+                user_dict = dict(user._mapping)
+                user_dict["password"] = user_dict.pop("password_hash", None)
+                return user_dict
+            else:
+                users = conn.execute(text("SELECT * FROM users")).fetchall()
+                result = []
+                for u in users:
+                    u_dict = dict(u._mapping)
+                    u_dict.pop("password_hash", None)
+                    result.append(u_dict)
+                return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.delete("/user/{user_id}", tags=["Auth & Users"])
 async def delete_user(user_id: str):
     try:
