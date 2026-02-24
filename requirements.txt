@@ -8,5 +8,5 @@ python-dotenv
 alembic
 passlib[bcrypt]
 python-jose[cryptography]
-Pillow
+pydantic[email]
 pillow
