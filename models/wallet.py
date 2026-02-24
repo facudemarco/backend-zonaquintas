@@ -8,6 +8,7 @@ class TransactionStatus(str, Enum):
     DISPONIBLE = "DISPONIBLE"
     ENTREGADO = "ENTREGADO"
     CANCELADO = "CANCELADO"
+    REEMBOLSADO = "REEMBOLSADO"
 
 class Currency(str, Enum):
     ARS = "ARS"
@@ -15,9 +16,11 @@ class Currency(str, Enum):
 
 class TransactionCreate(BaseModel):
     owner_id: str
+    client_id: str
     amount: float
     currency: Currency
     quinta_id: Optional[str] = None
+    booking_id: Optional[str] = None
     description: Optional[str] = None
     transfer_date_estimate: Optional[date] = None
     status: TransactionStatus = TransactionStatus.RETENIDO

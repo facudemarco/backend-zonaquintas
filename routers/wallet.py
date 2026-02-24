@@ -16,16 +16,33 @@ def ensure_wallet_table_exists():
             CREATE TABLE IF NOT EXISTS transactions (
                 id VARCHAR(36) PRIMARY KEY,
                 owner_id VARCHAR(36) NOT NULL,
+                client_id VARCHAR(36) NOT NULL,
                 quinta_id VARCHAR(36),
+                booking_id VARCHAR(36),
                 amount DECIMAL(15,2) NOT NULL,
                 currency ENUM('ARS', 'USD') NOT NULL,
-                status ENUM('RETENIDO', 'DISPONIBLE', 'ENTREGADO', 'CANCELADO') NOT NULL DEFAULT 'RETENIDO',
+                status ENUM('RETENIDO', 'DISPONIBLE', 'ENTREGADO', 'CANCELADO', 'REEMBOLSADO') NOT NULL DEFAULT 'RETENIDO',
                 transfer_date_estimate DATE,
                 description VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         """))
+    
+    # Patch existing table for new columns safely
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE transactions MODIFY status ENUM('RETENIDO', 'DISPONIBLE', 'ENTREGADO', 'CANCELADO', 'REEMBOLSADO') NOT NULL DEFAULT 'RETENIDO'"))
+            # Revisa si las columnas existen
+            res_client = conn.execute(text("SHOW COLUMNS FROM transactions LIKE 'client_id'")).fetchone()
+            if not res_client:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN client_id VARCHAR(36) NOT NULL DEFAULT 'SYSTEM' AFTER owner_id"))
+            
+            res_booking = conn.execute(text("SHOW COLUMNS FROM transactions LIKE 'booking_id'")).fetchone()
+            if not res_booking:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN booking_id VARCHAR(36) NULL AFTER quinta_id"))
+    except Exception as e:
+        print(f"Error checking/patching transactions table: {e}")
 
 # Execute the table creation when the router is loaded
 ensure_wallet_table_exists()
@@ -108,13 +125,15 @@ async def create_transaction(data: TransactionCreate):
             conn.execute(
                 text("""
                     INSERT INTO transactions 
-                    (id, owner_id, quinta_id, amount, currency, status, transfer_date_estimate, description) 
-                    VALUES (:id, :owner_id, :quinta_id, :amount, :currency, :status, :transfer_date_estimate, :description)
+                    (id, owner_id, client_id, quinta_id, booking_id, amount, currency, status, transfer_date_estimate, description) 
+                    VALUES (:id, :owner_id, :client_id, :quinta_id, :booking_id, :amount, :currency, :status, :transfer_date_estimate, :description)
                 """),
                 {
                     "id": tx_id,
                     "owner_id": data.owner_id,
+                    "client_id": data.client_id,
                     "quinta_id": data.quinta_id,
+                    "booking_id": data.booking_id,
                     "amount": data.amount,
                     "currency": data.currency.value,
                     "status": data.status.value,
@@ -165,5 +184,42 @@ async def trigger_manual_payout(owner_id: str):
                 return {"message": "No había fondos en estado DISPONIBLE para entregar. Nada cambió."}
                 
         return {"message": f"Pago marcado como ENTREGADO masivamente. {result.rowcount} transacciones afectadas."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/client/{client_id}", tags=["Wallet"])
+async def get_client_transactions(client_id: str):
+    """
+    Entrega el historial de transacciones donde el usuario actuó como inquilino/pagador.
+    """
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT t.*, q.title as quinta_title 
+                    FROM transactions t
+                    LEFT JOIN quintas q ON t.quinta_id = q.id
+                    WHERE t.client_id = :client_id 
+                    ORDER BY t.created_at DESC
+                """),
+                {"client_id": client_id}
+            )
+            transactions = result.mappings().all()
+
+            recent_tx_list = []
+            for tx in transactions:
+                recent_tx_list.append({
+                    "id": tx["id"],
+                    "date": tx["created_at"].strftime("%d/%m/%Y"),
+                    "quinta_name": tx["quinta_title"] if tx["quinta_title"] else "N/A",
+                    "amount": float(tx["amount"]),
+                    "currency": tx["currency"],
+                    "status": tx["status"],
+                    "description": tx["description"]
+                })
+
+            return {
+                "transactions": recent_tx_list
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
