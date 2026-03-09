@@ -28,9 +28,6 @@ app.add_middleware(
 IMAGES_DIR = os.path.join(os.getcwd(), "images")
 app.mount("/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api/images", StaticFiles(directory=IMAGES_DIR), name="images")
 
-IS_PROD = os.getenv("ENV") == "production"
-print(IS_PROD)
-
 @app.get("/")
 async def root():
     return {"message": "API Zona Quintas by iWeb Technology. 2025 All rights reserved."}
