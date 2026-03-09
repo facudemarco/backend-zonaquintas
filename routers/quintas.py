@@ -129,7 +129,7 @@ async def upload_quinta_images(
             other_image_urls = []
             if images:
                 for img in images:
-                    if isinstance(img, UploadFile) and getattr(img, "filename", None):
+                    if getattr(img, "filename", None):
                         url = save_image_to_disk(img)
                         other_image_urls.append(url)
             
@@ -360,7 +360,7 @@ async def update_quinta_images(
                     )
             
             for img in images or []:
-                if isinstance(img, UploadFile) and getattr(img, "filename", None):
+                if getattr(img, "filename", None):
                     public_url = save_image_to_disk(img)
                     conn.execute(
                         text("INSERT INTO images_quintas (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
