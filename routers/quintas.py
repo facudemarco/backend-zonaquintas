@@ -87,7 +87,7 @@ async def create_quinta(data: QuintaCreate):
 async def upload_quinta_images(
     quinta_id: str,
     main_image: UploadFile = File(...),
-    images: Optional[List[UploadFile]] = File(None),
+    images: List[UploadFile] = File(default=[]),
 ):
     try:
         # Check if quinta exists
@@ -296,7 +296,7 @@ async def update_quinta(
 async def update_quinta_images(
     quinta_id: str,
     main_image: Optional[UploadFile] = File(None),
-    images: Optional[List[UploadFile]] = File(None),
+    images: List[UploadFile] = File(default=[]),
 ):
     try:
         with engine.begin() as conn:

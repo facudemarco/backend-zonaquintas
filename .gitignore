@@ -16,6 +16,7 @@ tests/
 pytest_output.txt
 test-results.txt
 frontend-integration-guide.md
+test_schema.py
 
 # Images dir
 images/
