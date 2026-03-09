@@ -95,8 +95,7 @@ async def create_quinta(data: QuintaCreate):
                         "properties": {
                             "main_image": {"type": "string", "format": "binary"},
                             "images": {"type": "array", "items": {"type": "string", "format": "binary"}}
-                        },
-                        "required": ["main_image"]
+                        }
                     }
                 }
             }
@@ -106,7 +105,7 @@ async def create_quinta(data: QuintaCreate):
 async def upload_quinta_images(
     quinta_id: str,
     request: Request,
-    main_image: UploadFile = File(...),
+    main_image: Optional[UploadFile] = File(None),
 ):
     try:
         form_data = await request.form()
@@ -118,19 +117,21 @@ async def upload_quinta_images(
             if not check:
                 raise HTTPException(status_code=404, detail="Quinta no encontrada para sumarle imágenes")
 
-            # Save main image
-            url_main = save_image_to_disk(main_image)
-            conn.execute(
-                text("INSERT INTO quintas_main_images (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
-                {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": url_main}
-            )
+            url_main_response = None
+            if main_image and getattr(main_image, "filename", None):
+                url_main = save_image_to_disk(main_image)
+                conn.execute(
+                    text("INSERT INTO quintas_main_images (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
+                    {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": url_main}
+                )
+                url_main_response = url_main
 
             # Save other images
             other_image_urls = []
             if images:
                 for img in images:
-                    if getattr(img, "filename", None):
-                        url = save_image_to_disk(img)
+                    if not isinstance(img, str) and getattr(img, "filename", None):
+                        url = save_image_to_disk(img) # type: ignore
                         other_image_urls.append(url)
             
             for url in other_image_urls:
@@ -139,7 +140,7 @@ async def upload_quinta_images(
                     {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": url}
                 )
 
-        return {"message": "Imágenes asociadas correctamente", "main_image_url": url_main}
+        return {"message": "Imágenes asociadas correctamente", "main_image_url": url_main_response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -360,8 +361,8 @@ async def update_quinta_images(
                     )
             
             for img in images or []:
-                if getattr(img, "filename", None):
-                    public_url = save_image_to_disk(img)
+                if not isinstance(img, str) and getattr(img, "filename", None):
+                    public_url = save_image_to_disk(img) # type: ignore
                     conn.execute(
                         text("INSERT INTO images_quintas (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
                         {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": public_url}
