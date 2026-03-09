@@ -1,5 +1,5 @@
-from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Form, UploadFile, File
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Form, UploadFile, File, Request
 import os
 import shutil
 from PIL import Image
@@ -83,13 +83,35 @@ async def create_quinta(data: QuintaCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/quintas/{quinta_id}/images", tags=["Quintas"])
+@router.post(
+    "/quintas/{quinta_id}/images", 
+    tags=["Quintas"],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "main_image": {"type": "string", "format": "binary"},
+                            "images": {"type": "array", "items": {"type": "string", "format": "binary"}}
+                        },
+                        "required": ["main_image"]
+                    }
+                }
+            }
+        }
+    }
+)
 async def upload_quinta_images(
     quinta_id: str,
+    request: Request,
     main_image: UploadFile = File(...),
-    images: List[UploadFile] = File(default=[]),
 ):
     try:
+        form_data = await request.form()
+        images = form_data.getlist("images")
+        
         # Check if quinta exists
         with engine.begin() as conn:
             check = conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone()
@@ -107,7 +129,7 @@ async def upload_quinta_images(
             other_image_urls = []
             if images:
                 for img in images:
-                    if getattr(img, "filename", None):
+                    if isinstance(img, UploadFile) and getattr(img, "filename", None):
                         url = save_image_to_disk(img)
                         other_image_urls.append(url)
             
@@ -292,13 +314,34 @@ async def update_quinta(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/quintas/{quinta_id}/images", tags=["Quintas"])
+@router.put(
+    "/quintas/{quinta_id}/images", 
+    tags=["Quintas"],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "main_image": {"type": "string", "format": "binary"},
+                            "images": {"type": "array", "items": {"type": "string", "format": "binary"}}
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def update_quinta_images(
     quinta_id: str,
+    request: Request,
     main_image: Optional[UploadFile] = File(None),
-    images: List[UploadFile] = File(default=[]),
 ):
     try:
+        form_data = await request.form()
+        images = form_data.getlist("images")
+        
         with engine.begin() as conn:
             check = conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone()
             if not check:
@@ -317,7 +360,7 @@ async def update_quinta_images(
                     )
             
             for img in images or []:
-                if getattr(img, "filename", None):
+                if isinstance(img, UploadFile) and getattr(img, "filename", None):
                     public_url = save_image_to_disk(img)
                     conn.execute(
                         text("INSERT INTO images_quintas (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
