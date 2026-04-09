@@ -147,7 +147,7 @@ async def update_user(user_id: str, data: UserUpdate):
                     {"pw": data.password, "id": user_id}
                 )
             
-            # Actualiza el resto de atributos
+            # Actualiza el resto de atributos (solo columnas que existen en la tabla users)
             conn.execute(
                 text("""
                     UPDATE users SET
@@ -163,7 +163,7 @@ async def update_user(user_id: str, data: UserUpdate):
                     WHERE id = :id
                 """),
                 {
-                    "id": user_id,
+                    "id": user_id,  
                     "email": data.email,
                     "phone": data.phone,
                     "dob": data.date_of_birth,
@@ -175,6 +175,18 @@ async def update_user(user_id: str, data: UserUpdate):
                     "avg_op": data.average_opinions
                 }
             )
+            
+            # Normalizar idiomas
+            if data.languages:
+                data.languages = [lang.lower() for lang in data.languages]
+            
+            # Normalizar opiniones
+            if data.opinions:
+                data.opinions = [op.lower() for op in data.opinions]
+            
+            # Normalizar fotos
+            if data.pictures:
+                data.pictures = [pic.lower() for pic in data.pictures]
             
             # Actualizar relaciones 1:N (Reemplazo completo si se envían)
             if data.languages is not None:
@@ -216,6 +228,23 @@ async def get_users(id: str = None):
                 
                 user_dict = dict(user._mapping)
                 user_dict["password"] = user_dict.pop("password_hash", None)
+                
+                # Obtener relaciones 1:N
+                languages = conn.execute(
+                    text("SELECT languages FROM users_languages WHERE user_id = :id"), {"id": id}
+                ).fetchall()
+                user_dict["languages"] = [row.languages for row in languages]
+                
+                opinions = conn.execute(
+                    text("SELECT opinions FROM users_opinions WHERE user_id = :id"), {"id": id}
+                ).fetchall()
+                user_dict["opinions"] = [row.opinions for row in opinions]
+                
+                pictures = conn.execute(
+                    text("SELECT url FROM users_picture WHERE user_id = :id"), {"id": id}
+                ).fetchall()
+                user_dict["pictures"] = [row.url for row in pictures]
+                
                 return user_dict
             else:
                 users = conn.execute(text("SELECT * FROM users")).fetchall()
@@ -223,6 +252,24 @@ async def get_users(id: str = None):
                 for u in users:
                     u_dict = dict(u._mapping)
                     u_dict.pop("password_hash", None)
+                    uid = u_dict["id"]
+                    
+                    # Obtener relaciones 1:N para cada usuario
+                    languages = conn.execute(
+                        text("SELECT languages FROM users_languages WHERE user_id = :id"), {"id": uid}
+                    ).fetchall()
+                    u_dict["languages"] = [row.languages for row in languages]
+                    
+                    opinions = conn.execute(
+                        text("SELECT opinions FROM users_opinions WHERE user_id = :id"), {"id": uid}
+                    ).fetchall()
+                    u_dict["opinions"] = [row.opinions for row in opinions]
+                    
+                    pictures = conn.execute(
+                        text("SELECT url FROM users_picture WHERE user_id = :id"), {"id": uid}
+                    ).fetchall()
+                    u_dict["pictures"] = [row.url for row in pictures]
+                    
                     result.append(u_dict)
                 return result
     except HTTPException:
