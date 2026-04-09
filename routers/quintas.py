@@ -1,14 +1,13 @@
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Form, UploadFile, File, Request
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Request, UploadFile
 import os
 import shutil
 from PIL import Image
 from sqlalchemy import text
 from Database.getConnection import engine
 import uuid
-from fastapi import Depends, HTTPException, UploadFile, File
+import json
 from models.quintas import QuintaCreate, QuintaUpdate
-from utils.security import get_current_user
 
 router = APIRouter()
 
@@ -16,85 +15,61 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMAGES_DIR = os.path.join(PROJECT_ROOT, "images")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "https://zonaquintas.com/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api/images")
 
+
 def save_image_to_disk(upload_file: UploadFile) -> str:
-    """Helper function to save an uploaded image to disk, compressing it, and return its public URL."""
+    """Guarda una imagen en disco comprimiéndola y retorna su URL pública."""
     if not os.path.exists(IMAGES_DIR):
         os.makedirs(IMAGES_DIR, exist_ok=True)
-        
+
     ext = os.path.splitext(upload_file.filename or "file.jpg")[1].lower()
-    # Forces conversion to WebP or optimized JPEG to save space
     fname = f"{uuid.uuid4()}{ext}"
     path = os.path.join(IMAGES_DIR, fname)
-    
-    try:
-        # Open image using Pillow
-        image = Image.open(upload_file.file)
 
-        # Convert to RGB if it's RGBA or P to avoid issues when saving as JPEG
+    try:
+        image = Image.open(upload_file.file)
         if image.mode in ("RGBA", "P"):
             image = image.convert("RGB")
-            
-        # Resize if width or height > 1920 preserving aspect ratio
-        max_size = (1920, 1080)
-        image.thumbnail(max_size, Image.Resampling.LANCZOS)
-        
-        # Save compressed
-        # Use webp if you'd like, or stick to standard jpeg/png depending on extension
+        image.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
         if ext in [".jpg", ".jpeg"]:
             image.save(path, format="JPEG", optimize=True, quality=80)
         elif ext == ".png":
             image.save(path, format="PNG", optimize=True)
         else:
-            image.save(path) # fallback
-            
-    except Exception as e:
-        # Fallback to pure copy if Pillow fails to parse it
+            image.save(path)
+    except Exception:
         upload_file.file.seek(0)
         with open(path, "wb") as buf:
             shutil.copyfileobj(upload_file.file, buf)
 
     return f"{DOMAIN_URL}/{fname}"
 
-@router.post("/quintas", tags=["Quintas"])
-async def create_quinta(data: QuintaCreate):
-    try:
-        quinta_id = str(uuid.uuid4())
-
-        with engine.begin() as conn:
-            # Quinta
-            conn.execute(
-                text("""
-                    INSERT INTO quintas (id, title, address, latitude, length, city, guests, bedrooms, bathrooms, environments, beds, price, description, owner_id, currency_price, created_at, a_a, medical_kit, wire, kitchen, cutlery, parking, home_stove, refrigerator, jacuzzi, kids_games, washing_machine, blankets, grill, pool, playroom, camera_clothes, bed_sheets, dryer, towels, tv, wifi, visits, crockery)
-                    VALUES (:id, :title, :address, :latitude, :length, :city, :guests, :bedrooms, :bathrooms, :environments, :beds, :price, :description, :owner_id, :currency_price, NOW(), :a_a, :medical_kit, :wire, :kitchen, :cutlery, :parking, :home_stove, :refrigerator, :jacuzzi, :kids_games, :washing_machine, :blankets, :grill, :pool, :playroom, :camera_clothes, :bed_sheets, :dryer, :towels, :tv, :wifi, :visits, :crockery)
-                """),
-                {
-                    "id": quinta_id, "title": data.title, "address": data.address, "latitude": data.latitude, "length": data.length, "city": data.city, 
-                    "guests": data.guests, "bedrooms": data.bedrooms, "bathrooms": data.bathrooms, "environments": data.environments, "beds": data.beds, 
-                    "price": data.price, "description": data.description, "owner_id": data.owner_id, "currency_price": data.currency_price,
-                    "a_a": data.a_a, "medical_kit": data.medical_kit, "wire": data.wire, "kitchen": data.kitchen, "cutlery": data.cutlery, "parking": data.parking, 
-                    "home_stove": data.home_stove, "refrigerator": data.refrigerator, "jacuzzi": data.jacuzzi, "kids_games": data.kids_games, 
-                    "washing_machine": data.washing_machine, "blankets": data.blankets, "grill": data.grill, "pool": data.pool, "playroom": data.playroom, 
-                    "camera_clothes": data.camera_clothes, "bed_sheets": data.bed_sheets, "dryer": data.dryer, "towels": data.towels, "tv": data.tv, 
-                    "wifi": data.wifi, "visits": data.visits, "crockery": data.crockery
-                }
-            )
-
-        return {"message": "Quinta created successfully", "id": quinta_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post(
-    "/quintas/{quinta_id}/images", 
+    "/quintas",
     tags=["Quintas"],
     openapi_extra={
         "requestBody": {
+            "required": True,
             "content": {
                 "multipart/form-data": {
                     "schema": {
                         "type": "object",
+                        "required": ["data"],
                         "properties": {
-                            "main_image": {"type": "string", "format": "binary"},
-                            "images": {"type": "array", "items": {"type": "string", "format": "binary"}}
+                            "data": {
+                                **QuintaCreate.model_json_schema(),
+                                "description": "JSON con los datos de la quinta"
+                            },
+                            "main_image": {
+                                "type": "string",
+                                "format": "binary",
+                                "description": "Imagen principal de la quinta"
+                            },
+                            "images": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                                "description": "Galería de imágenes adicionales"
+                            }
                         }
                     }
                 }
@@ -102,20 +77,78 @@ async def create_quinta(data: QuintaCreate):
         }
     }
 )
-async def upload_quinta_images(
-    quinta_id: str,
-    request: Request,
-    main_image: Optional[UploadFile] = File(None),
-):
+async def create_quinta(request: Request):
     try:
-        form_data = await request.form()
-        images = form_data.getlist("images")
-        
-        # Check if quinta exists
+        form = await request.form()
+
+        raw_data = form.get("data")
+        if not raw_data:
+            raise HTTPException(status_code=422, detail="El campo 'data' es requerido.")
+        try:
+            quinta_data = QuintaCreate.model_validate(json.loads(raw_data))
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"JSON inválido en 'data': {e}")
+
+        main_image: Optional[UploadFile] = form.get("main_image")  # type: ignore
+        images: List[UploadFile] = form.getlist("images")  # type: ignore
+
+        quinta_id = str(uuid.uuid4())
+
         with engine.begin() as conn:
-            check = conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone()
-            if not check:
-                raise HTTPException(status_code=404, detail="Quinta no encontrada para sumarle imágenes")
+            conn.execute(
+                text("""
+                    INSERT INTO quintas (
+                        id, title, address, latitude, length, city, guests, bedrooms, bathrooms,
+                        environments, beds, price, description, owner_id, currency_price, created_at,
+                        sabanas, mantas, almohadas, toilettes, shampoo, toallas, secador_pelo,
+                        lavarropas, cambio_toallas, utensillos_cocina, vajilla, freezer,
+                        televisor, radio, tv, cable, internet, parlantes,
+                        jacuzzi, playroom, sofas,
+                        estacionamiento_techado, parrilla, estufa_gas, hogar,
+                        hamacas_paraguayas, arboleda, cancha_futbol, piscina,
+                        cancha_basquet, cancha_tenis, cancha_padel, hamacas
+                    ) VALUES (
+                        :id, :title, :address, :latitude, :length, :city, :guests, :bedrooms, :bathrooms,
+                        :environments, :beds, :price, :description, :owner_id, :currency_price, NOW(),
+                        :sabanas, :mantas, :almohadas, :toilettes, :shampoo, :toallas, :secador_pelo,
+                        :lavarropas, :cambio_toallas, :utensillos_cocina, :vajilla, :freezer,
+                        :televisor, :radio, :tv, :cable, :internet, :parlantes,
+                        :jacuzzi, :playroom, :sofas,
+                        :estacionamiento_techado, :parrilla, :estufa_gas, :hogar,
+                        :hamacas_paraguayas, :arboleda, :cancha_futbol, :piscina,
+                        :cancha_basquet, :cancha_tenis, :cancha_padel, :hamacas
+                    )
+                """),
+                {
+                    "id": quinta_id,
+                    "title": quinta_data.title, "address": quinta_data.address,
+                    "latitude": quinta_data.latitude, "length": quinta_data.length,
+                    "city": quinta_data.city, "guests": quinta_data.guests,
+                    "bedrooms": quinta_data.bedrooms, "bathrooms": quinta_data.bathrooms,
+                    "environments": quinta_data.environments, "beds": quinta_data.beds,
+                    "price": quinta_data.price, "description": quinta_data.description,
+                    "owner_id": quinta_data.owner_id, "currency_price": quinta_data.currency_price,
+                    "sabanas": quinta_data.sabanas, "mantas": quinta_data.mantas,
+                    "almohadas": quinta_data.almohadas, "toilettes": quinta_data.toilettes,
+                    "shampoo": quinta_data.shampoo, "toallas": quinta_data.toallas,
+                    "secador_pelo": quinta_data.secador_pelo, "lavarropas": quinta_data.lavarropas,
+                    "cambio_toallas": quinta_data.cambio_toallas,
+                    "utensillos_cocina": quinta_data.utensillos_cocina, "vajilla": quinta_data.vajilla,
+                    "freezer": quinta_data.freezer,
+                    "televisor": quinta_data.televisor, "radio": quinta_data.radio,
+                    "tv": quinta_data.tv, "cable": quinta_data.cable,
+                    "internet": quinta_data.internet, "parlantes": quinta_data.parlantes,
+                    "jacuzzi": quinta_data.jacuzzi, "playroom": quinta_data.playroom,
+                    "sofas": quinta_data.sofas,
+                    "estacionamiento_techado": quinta_data.estacionamiento_techado,
+                    "parrilla": quinta_data.parrilla, "estufa_gas": quinta_data.estufa_gas,
+                    "hogar": quinta_data.hogar, "hamacas_paraguayas": quinta_data.hamacas_paraguayas,
+                    "arboleda": quinta_data.arboleda, "cancha_futbol": quinta_data.cancha_futbol,
+                    "piscina": quinta_data.piscina, "cancha_basquet": quinta_data.cancha_basquet,
+                    "cancha_tenis": quinta_data.cancha_tenis, "cancha_padel": quinta_data.cancha_padel,
+                    "hamacas": quinta_data.hamacas,
+                }
+            )
 
             url_main_response = None
             if main_image and getattr(main_image, "filename", None):
@@ -126,129 +159,118 @@ async def upload_quinta_images(
                 )
                 url_main_response = url_main
 
-            # Save other images
             other_image_urls = []
-            if images:
-                for img in images:
-                    if not isinstance(img, str) and getattr(img, "filename", None):
-                        url = save_image_to_disk(img) # type: ignore
-                        other_image_urls.append(url)
-            
-            for url in other_image_urls:
-                conn.execute(
-                    text("INSERT INTO images_quintas (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
-                    {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": url}
-                )
+            for img in (images or []):
+                if getattr(img, "filename", None):
+                    url = save_image_to_disk(img)
+                    other_image_urls.append(url)
+                    conn.execute(
+                        text("INSERT INTO images_quintas (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
+                        {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": url}
+                    )
 
-        return {"message": "Imágenes asociadas correctamente", "main_image_url": url_main_response}
+        return {
+            "message": "Quinta creada exitosamente.",
+            "id": quinta_id,
+            "main_image_url": url_main_response,
+            "image_urls": other_image_urls,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/quintas", tags=["Quintas"])
 async def get_quintas():
     try:
         with engine.begin() as conn:
-            result = conn.execute(text("SELECT * FROM quintas"))
-            rows = result.mappings().all()
+            rows = conn.execute(text("SELECT * FROM quintas")).mappings().all()
             if not rows:
-                raise HTTPException(status_code=404, detail="No quintas found.")
-            
+                return []
+
             quintas = []
             for quinta in rows:
                 hid = quinta["id"]
                 main = conn.execute(
-                    text("SELECT url FROM quintas_main_images WHERE quinta_id = :id"),
-                    {"id": hid}
+                    text("SELECT url FROM quintas_main_images WHERE quinta_id = :id"), {"id": hid}
                 ).fetchone()
-                images = conn.execute(
-                    text("SELECT url FROM images_quintas WHERE quinta_id = :id"),
-                    {"id": hid}
+                imgs = conn.execute(
+                    text("SELECT url FROM images_quintas WHERE quinta_id = :id"), {"id": hid}
                 ).scalars().all()
-                
                 data = dict(quinta)
                 data["main_image"] = main[0] if main else None
-                data["images"] = images
+                data["images"] = list(imgs)
                 quintas.append(data)
             return quintas
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @router.get("/quintas/{quinta_id}", tags=["Quintas"])
 async def get_quinta_by_id(quinta_id: str):
     try:
         with engine.begin() as conn:
-            result = conn.execute(
-                text("SELECT * FROM quintas WHERE id = :id"),
-                {"id": quinta_id}
-            )
-            quinta = result.mappings().first()
+            quinta = conn.execute(
+                text("SELECT * FROM quintas WHERE id = :id"), {"id": quinta_id}
+            ).mappings().first()
             if not quinta:
-                raise HTTPException(status_code=404, detail="Quinta not found.")
-            
+                raise HTTPException(status_code=404, detail="Quinta no encontrada.")
+
             main = conn.execute(
-                text("SELECT url FROM quintas_main_images WHERE quinta_id = :id"),
-                {"id": quinta_id}
+                text("SELECT url FROM quintas_main_images WHERE quinta_id = :id"), {"id": quinta_id}
             ).fetchone()
-            images = conn.execute(
-                text("SELECT url FROM images_quintas WHERE quinta_id = :id"),
-                {"id": quinta_id}
+            imgs = conn.execute(
+                text("SELECT url FROM images_quintas WHERE quinta_id = :id"), {"id": quinta_id}
             ).scalars().all()
-            
+
             data = dict(quinta)
             data["main_image"] = main[0] if main else None
-            data["images"] = images
+            data["images"] = list(imgs)
             return data
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @router.delete("/quintas/{quinta_id}", tags=["Quintas"])
 async def delete_quinta(quinta_id: str):
     try:
         with engine.begin() as conn:
-            result = conn.execute(
-                text("SELECT * FROM quintas WHERE id = :id"),
-                {"id": quinta_id}
-            )
-            if not result.mappings().first():
-                raise HTTPException(status_code=404, detail="Quinta not found.")
-            
-            # Helper to delete file
-            def delete_file_from_url(url: str):
-                if url:
-                    file_path = os.path.join(IMAGES_DIR, os.path.basename(url))
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
+            if not conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone():
+                raise HTTPException(status_code=404, detail="Quinta no encontrada.")
 
-            # Fetch and delete main image
-            main_image = conn.execute(
-                text("SELECT url FROM quintas_main_images WHERE quinta_id = :id"),
-                {"id": quinta_id}
+            def delete_file(url: str):
+                if url:
+                    path = os.path.join(IMAGES_DIR, os.path.basename(url))
+                    if os.path.exists(path):
+                        os.remove(path)
+
+            main = conn.execute(
+                text("SELECT url FROM quintas_main_images WHERE quinta_id = :id"), {"id": quinta_id}
             ).fetchone()
-            if main_image:
-                delete_file_from_url(main_image[0])
+            if main:
+                delete_file(main[0])
             conn.execute(text("DELETE FROM quintas_main_images WHERE quinta_id = :id"), {"id": quinta_id})
-            
-            # Fetch and delete other images
-            images = conn.execute(
-                text("SELECT url FROM images_quintas WHERE quinta_id = :id"),
-                {"id": quinta_id}
-            ).scalars().all()
-            for img_url in images:
-                delete_file_from_url(img_url)
+
+            for img_url in conn.execute(
+                text("SELECT url FROM images_quintas WHERE quinta_id = :id"), {"id": quinta_id}
+            ).scalars().all():
+                delete_file(img_url)
             conn.execute(text("DELETE FROM images_quintas WHERE quinta_id = :id"), {"id": quinta_id})
-            
-            # Delete the quinta
+
             conn.execute(text("DELETE FROM quintas WHERE id = :id"), {"id": quinta_id})
-            
-        return {"message": "Quinta and associated images deleted successfully."}
+
+        return {"message": "Quinta e imágenes eliminadas exitosamente."}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.put("/quintas/{quinta_id}", tags=["Quintas"])
-async def update_quinta(
-    quinta_id: str,
-    data: QuintaUpdate,
-):
+async def update_quinta(quinta_id: str, data: QuintaUpdate):
     try:
         with engine.begin() as conn:
             result = conn.execute(
@@ -268,55 +290,80 @@ async def update_quinta(
                         description = COALESCE(:description, description),
                         owner_id = COALESCE(:owner_id, owner_id),
                         currency_price = COALESCE(:currency_price, currency_price),
-                        a_a = COALESCE(:a_a, a_a),
-                        medical_kit = COALESCE(:medical_kit, medical_kit),
-                        wire = COALESCE(:wire, wire),
-                        kitchen = COALESCE(:kitchen, kitchen),
-                        cutlery = COALESCE(:cutlery, cutlery),
-                        parking = COALESCE(:parking, parking),
-                        home_stove = COALESCE(:home_stove, home_stove),
-                        refrigerator = COALESCE(:refrigerator, refrigerator),
-                        jacuzzi = COALESCE(:jacuzzi, jacuzzi),
-                        kids_games = COALESCE(:kids_games, kids_games),
-                        washing_machine = COALESCE(:washing_machine, washing_machine),
-                        blankets = COALESCE(:blankets, blankets),
-                        grill = COALESCE(:grill, grill),
-                        pool = COALESCE(:pool, pool),
-                        playroom = COALESCE(:playroom, playroom),
-                        camera_clothes = COALESCE(:camera_clothes, camera_clothes),
-                        bed_sheets = COALESCE(:bed_sheets, bed_sheets),
-                        dryer = COALESCE(:dryer, dryer),
-                        towels = COALESCE(:towels, towels),
+                        sabanas = COALESCE(:sabanas, sabanas),
+                        mantas = COALESCE(:mantas, mantas),
+                        almohadas = COALESCE(:almohadas, almohadas),
+                        toilettes = COALESCE(:toilettes, toilettes),
+                        shampoo = COALESCE(:shampoo, shampoo),
+                        toallas = COALESCE(:toallas, toallas),
+                        secador_pelo = COALESCE(:secador_pelo, secador_pelo),
+                        lavarropas = COALESCE(:lavarropas, lavarropas),
+                        cambio_toallas = COALESCE(:cambio_toallas, cambio_toallas),
+                        utensillos_cocina = COALESCE(:utensillos_cocina, utensillos_cocina),
+                        vajilla = COALESCE(:vajilla, vajilla),
+                        freezer = COALESCE(:freezer, freezer),
+                        televisor = COALESCE(:televisor, televisor),
+                        radio = COALESCE(:radio, radio),
                         tv = COALESCE(:tv, tv),
-                        wifi = COALESCE(:wifi, wifi),
-                        visits = COALESCE(:visits, visits),
-                        crockery = COALESCE(:crockery, crockery)                        
+                        cable = COALESCE(:cable, cable),
+                        internet = COALESCE(:internet, internet),
+                        parlantes = COALESCE(:parlantes, parlantes),
+                        jacuzzi = COALESCE(:jacuzzi, jacuzzi),
+                        playroom = COALESCE(:playroom, playroom),
+                        sofas = COALESCE(:sofas, sofas),
+                        estacionamiento_techado = COALESCE(:estacionamiento_techado, estacionamiento_techado),
+                        parrilla = COALESCE(:parrilla, parrilla),
+                        estufa_gas = COALESCE(:estufa_gas, estufa_gas),
+                        hogar = COALESCE(:hogar, hogar),
+                        hamacas_paraguayas = COALESCE(:hamacas_paraguayas, hamacas_paraguayas),
+                        arboleda = COALESCE(:arboleda, arboleda),
+                        cancha_futbol = COALESCE(:cancha_futbol, cancha_futbol),
+                        piscina = COALESCE(:piscina, piscina),
+                        cancha_basquet = COALESCE(:cancha_basquet, cancha_basquet),
+                        cancha_tenis = COALESCE(:cancha_tenis, cancha_tenis),
+                        cancha_padel = COALESCE(:cancha_padel, cancha_padel),
+                        hamacas = COALESCE(:hamacas, hamacas)
                     WHERE id = :id
                 """),
                 {
-                    "id": quinta_id, "title": data.title, "address": data.address, "latitude": data.latitude, "length": data.length,
-                    "city": data.city, "guests": data.guests, "bedrooms": data.bedrooms, "bathrooms": data.bathrooms, "environments": data.environments,
-                    "beds": data.beds, "price": data.price, "description": data.description, "owner_id": data.owner_id, "currency_price": data.currency_price,
-                    "a_a": data.a_a, "medical_kit": data.medical_kit, "wire": data.wire, "kitchen": data.kitchen, "cutlery": data.cutlery,
-                    "parking": data.parking, "home_stove": data.home_stove, "refrigerator": data.refrigerator, "jacuzzi": data.jacuzzi,
-                    "kids_games": data.kids_games, "washing_machine": data.washing_machine, "blankets": data.blankets, "grill": data.grill,
-                    "pool": data.pool, "playroom": data.playroom, "camera_clothes": data.camera_clothes, "bed_sheets": data.bed_sheets,
-                    "dryer": data.dryer, "towels": data.towels, "tv": data.tv, "wifi": data.wifi, "visits": data.visits, "crockery": data.crockery
+                    "id": quinta_id,
+                    "title": data.title, "address": data.address, "latitude": data.latitude,
+                    "length": data.length, "city": data.city, "guests": data.guests,
+                    "bedrooms": data.bedrooms, "bathrooms": data.bathrooms,
+                    "environments": data.environments, "beds": data.beds,
+                    "price": data.price, "description": data.description,
+                    "owner_id": data.owner_id, "currency_price": data.currency_price,
+                    "sabanas": data.sabanas, "mantas": data.mantas, "almohadas": data.almohadas,
+                    "toilettes": data.toilettes, "shampoo": data.shampoo, "toallas": data.toallas,
+                    "secador_pelo": data.secador_pelo, "lavarropas": data.lavarropas,
+                    "cambio_toallas": data.cambio_toallas,
+                    "utensillos_cocina": data.utensillos_cocina, "vajilla": data.vajilla,
+                    "freezer": data.freezer,
+                    "televisor": data.televisor, "radio": data.radio, "tv": data.tv,
+                    "cable": data.cable, "internet": data.internet, "parlantes": data.parlantes,
+                    "jacuzzi": data.jacuzzi, "playroom": data.playroom, "sofas": data.sofas,
+                    "estacionamiento_techado": data.estacionamiento_techado,
+                    "parrilla": data.parrilla, "estufa_gas": data.estufa_gas, "hogar": data.hogar,
+                    "hamacas_paraguayas": data.hamacas_paraguayas, "arboleda": data.arboleda,
+                    "cancha_futbol": data.cancha_futbol, "piscina": data.piscina,
+                    "cancha_basquet": data.cancha_basquet, "cancha_tenis": data.cancha_tenis,
+                    "cancha_padel": data.cancha_padel, "hamacas": data.hamacas,
                 }
             )
-            
+
             if result.rowcount == 0:
-                # Let's double check if it's 404 or just no changes made.
-                check = conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone()
-                if not check:
-                    raise HTTPException(status_code=404, detail="Quinta not found.")
-        
-        return {"message": "Quinta updated successfully (metadata/JSON changes)."}
+                if not conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone():
+                    raise HTTPException(status_code=404, detail="Quinta no encontrada.")
+
+        return {"message": "Quinta actualizada exitosamente."}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.put(
-    "/quintas/{quinta_id}/images", 
+    "/quintas/{quinta_id}/images",
     tags=["Quintas"],
     openapi_extra={
         "requestBody": {
@@ -325,8 +372,16 @@ async def update_quinta(
                     "schema": {
                         "type": "object",
                         "properties": {
-                            "main_image": {"type": "string", "format": "binary"},
-                            "images": {"type": "array", "items": {"type": "string", "format": "binary"}}
+                            "main_image": {
+                                "type": "string",
+                                "format": "binary",
+                                "description": "Nueva imagen principal (reemplaza la existente)"
+                            },
+                            "images": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                                "description": "Imágenes adicionales a agregar a la galería"
+                            }
                         }
                     }
                 }
@@ -334,40 +389,38 @@ async def update_quinta(
         }
     }
 )
-async def update_quinta_images(
-    quinta_id: str,
-    request: Request,
-    main_image: Optional[UploadFile] = File(None),
-):
+async def update_quinta_images(quinta_id: str, request: Request):
     try:
-        form_data = await request.form()
-        images = form_data.getlist("images")
-        
+        form = await request.form()
+        main_image: Optional[UploadFile] = form.get("main_image")  # type: ignore
+        images: List[UploadFile] = form.getlist("images")  # type: ignore
+
         with engine.begin() as conn:
-            check = conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone()
-            if not check:
-                raise HTTPException(status_code=404, detail="Quinta not found.")
-            
+            if not conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone():
+                raise HTTPException(status_code=404, detail="Quinta no encontrada.")
+
             if main_image and getattr(main_image, "filename", None):
                 url_main = save_image_to_disk(main_image)
                 res = conn.execute(
-                    text("UPDATE quintas_main_images SET url = :url WHERE quinta_id = :quinta_id"),
-                    {"url": url_main, "quinta_id": quinta_id}
+                    text("UPDATE quintas_main_images SET url = :url WHERE quinta_id = :id"),
+                    {"url": url_main, "id": quinta_id}
                 )
                 if res.rowcount == 0:
                     conn.execute(
                         text("INSERT INTO quintas_main_images (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
                         {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": url_main}
                     )
-            
-            for img in images or []:
-                if not isinstance(img, str) and getattr(img, "filename", None):
-                    public_url = save_image_to_disk(img) # type: ignore
+
+            for img in images:
+                if getattr(img, "filename", None):
+                    public_url = save_image_to_disk(img)
                     conn.execute(
                         text("INSERT INTO images_quintas (id, quinta_id, url) VALUES (:id, :quinta_id, :url)"),
                         {"id": str(uuid.uuid4()), "quinta_id": quinta_id, "url": public_url}
                     )
-        
-        return {"message": "Quinta images updated successfully."}
+
+        return {"message": "Imágenes actualizadas exitosamente."}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
