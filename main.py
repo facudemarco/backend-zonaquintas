@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import quintas, auth, wallet
+from routers import auth, bookings, favorites, quintas, reviews, wallet
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from fastapi.staticfiles import StaticFiles
@@ -35,3 +35,6 @@ async def root():
 app.include_router(auth.router)
 app.include_router(quintas.router)
 app.include_router(wallet.router)
+app.include_router(bookings.router)
+app.include_router(favorites.router)
+app.include_router(reviews.router)

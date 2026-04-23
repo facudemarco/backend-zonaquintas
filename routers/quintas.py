@@ -241,6 +241,27 @@ async def delete_quinta(quinta_id: str):
             if not conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone():
                 raise HTTPException(status_code=404, detail="Quinta no encontrada.")
 
+            dependencies = {
+                "bookings": conn.execute(
+                    text("SELECT COUNT(*) FROM bookings WHERE quinta_id = :id"), {"id": quinta_id}
+                ).scalar() or 0,
+                "favorites": conn.execute(
+                    text("SELECT COUNT(*) FROM favorites WHERE quinta_id = :id"), {"id": quinta_id}
+                ).scalar() or 0,
+                "transactions": conn.execute(
+                    text("SELECT COUNT(*) FROM transactions WHERE quinta_id = :id"), {"id": quinta_id}
+                ).scalar() or 0,
+            }
+            active_dependencies = {key: value for key, value in dependencies.items() if value}
+            if active_dependencies:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "No se puede eliminar la quinta porque tiene relaciones activas.",
+                        "dependencies": active_dependencies,
+                    },
+                )
+
             def delete_file(url: str):
                 if url:
                     path = os.path.join(IMAGES_DIR, os.path.basename(url))

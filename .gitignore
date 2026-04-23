@@ -4,6 +4,8 @@
 # python cache
 __pycache__/
 *.py[cod]
+schema.json
+.pytest_cache/
 
 # virtual environment
 venv/
@@ -22,4 +24,11 @@ test_schema.py
 images/
 
 # DB
-u830440565_zonaquintas.sql
+u830440565_zonaquintas NEW.sql
+u830440565_zonaquintas OLD.sql
+
+# Files
+FRONTEND_REPORT.html
+FRONTEND_REPORT.md
+AGENTS.md
+.autohand/

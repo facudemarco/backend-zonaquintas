@@ -281,6 +281,39 @@ async def get_users(id: str = None):
 async def delete_user(user_id: str):
     try:
         with engine.begin() as conn:
+            if not conn.execute(text("SELECT id FROM users WHERE id = :id"), {"id": user_id}).fetchone():
+                raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+            dependencies = {
+                "bookings_as_guest": conn.execute(
+                    text("SELECT COUNT(*) FROM bookings WHERE guest_id = :id"), {"id": user_id}
+                ).scalar() or 0,
+                "bookings_as_owner": conn.execute(
+                    text("SELECT COUNT(*) FROM bookings WHERE owner_id = :id"), {"id": user_id}
+                ).scalar() or 0,
+                "favorites": conn.execute(
+                    text("SELECT COUNT(*) FROM favorites WHERE user_id = :id"), {"id": user_id}
+                ).scalar() or 0,
+                "transactions_as_owner": conn.execute(
+                    text("SELECT COUNT(*) FROM transactions WHERE owner_id = :id"), {"id": user_id}
+                ).scalar() or 0,
+                "transactions_as_client": conn.execute(
+                    text("SELECT COUNT(*) FROM transactions WHERE client_id = :id"), {"id": user_id}
+                ).scalar() or 0,
+            }
+            active_dependencies = {key: value for key, value in dependencies.items() if value}
+            if active_dependencies:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "No se puede eliminar el usuario porque tiene relaciones activas.",
+                        "dependencies": active_dependencies,
+                    },
+                )
+
+            conn.execute(text("DELETE FROM users_languages WHERE user_id = :id"), {"id": user_id})
+            conn.execute(text("DELETE FROM users_opinions WHERE user_id = :id"), {"id": user_id})
+            conn.execute(text("DELETE FROM users_picture WHERE user_id = :id"), {"id": user_id})
             result = conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
             if result.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Usuario no encontrado.")
