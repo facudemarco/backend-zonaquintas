@@ -120,15 +120,16 @@ async def login(data: LoginData, response: Response):
                     raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
                 
             # Token con vigencia de 60 dias
-            token = create_access_token(data={"sub": user.id})
+            token = create_access_token(data={"user_id": user.id})
 
             response.set_cookie(
                 key="access_token",
                 value=f"Bearer {token}",
                 httponly=True,
-                max_age=5184000,
-                samesite="lax",
-                secure=False,
+                secure=True,       
+                samesite="none",    
+                max_age=60 * 60 * 24 * 7,   
+                path="/",
             )
             return {"message": "Sesion iniciada correctamente. Cookie guardada.", "user_id": user.id}
     except HTTPException:
@@ -216,8 +217,42 @@ async def update_user(user_id: str, data: UserUpdate):
         return {"message": "Usuario modificado correctamente."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
+    
+    
 @router.get("/users", tags=["Auth & Users"])
+async def get_all_users():
+    try:
+        with engine.begin() as conn:
+            users = conn.execute(text("SELECT * FROM users")).fetchall()
+            result = []
+            for u in users:
+                u_dict = dict(u._mapping)
+                u_dict.pop("password_hash", None)
+                uid = u_dict["id"]
+                
+                # Obtener relaciones 1:N para cada usuario
+                languages = conn.execute(
+                    text("SELECT languages FROM users_languages WHERE user_id = :id"), {"id": uid}
+                ).fetchall()
+                u_dict["languages"] = [row.languages for row in languages]
+                
+                opinions = conn.execute(
+                    text("SELECT opinions FROM users_opinions WHERE user_id = :id"), {"id": uid}
+                ).fetchall()
+                u_dict["opinions"] = [row.opinions for row in opinions]
+                
+                pictures = conn.execute(
+                    text("SELECT url FROM users_picture WHERE user_id = :id"), {"id": uid}
+                ).fetchall()
+                u_dict["pictures"] = [row.url for row in pictures]
+                
+                result.append(u_dict)
+            return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/user_by_id", tags=["Auth & Users"])
 async def get_users(id: str = None):
     try:
         with engine.begin() as conn:
@@ -330,4 +365,4 @@ async def logout(response: Response):
 
 @router.get("/me", tags=["Auth & Users"])
 async def protect_route(current_user: str = Depends(get_current_user)):
-    return {"message": f"Estas logueado bajo la identidad persistente {current_user}"}
+    return {"current_user": current_user}

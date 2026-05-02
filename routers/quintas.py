@@ -206,6 +206,19 @@ async def get_quintas():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/quintas/getAddressFromQuintas", tags=["Quintas"])
+async def get_address_from_quintas():
+    """Trae todas las direcciones y ciudades de las quintas para el buscador"""
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text("SELECT DISTINCT address, city FROM quintas")
+            ).mappings().all()
+
+            return [dict(row) for row in rows]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/quintas/{quinta_id}", tags=["Quintas"])
 async def get_quinta_by_id(quinta_id: str):
@@ -232,7 +245,6 @@ async def get_quinta_by_id(quinta_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.delete("/quintas/{quinta_id}", tags=["Quintas"])
 async def delete_quinta(quinta_id: str):
