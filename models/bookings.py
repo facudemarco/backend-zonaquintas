@@ -10,6 +10,7 @@ class BookingCreate(BaseModel):
     owner_id: str
     check_in: date
     check_out: date
+    payment_type: Optional[str] = None
     guest_count: Optional[float] = None
     message: Optional[str] = None
     currency_price: Optional[str] = None
