@@ -34,7 +34,7 @@ def get_current_user(token: str = Depends(get_token_from_cookie)):
     """Validates the token from the cookie."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
+        user_id: str = payload.get("user_id")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Could not validate credentials")
         return user_id

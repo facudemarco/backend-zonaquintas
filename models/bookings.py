@@ -15,6 +15,9 @@ class BookingCreate(BaseModel):
     currency_price: Optional[str] = None
     amount: Optional[float] = None
     status: Optional[str] = "PENDIENTE"
+    quinta_title: Optional[str] = None
+    quinta_address: Optional[str] = None
+    quinta_main_image: Optional[str] = None
 
 
 class BookingStatusUpdate(BaseModel):
