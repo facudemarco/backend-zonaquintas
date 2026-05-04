@@ -99,7 +99,7 @@ async def create_quinta(request: Request):
                 text("""
                     INSERT INTO quintas (
                         id, title, address, latitude, length, city, guests, bedrooms, bathrooms,
-                        environments, beds, price, description, owner_id, currency_price, created_at,
+                        environments, status, payment_type, beds, price, description, owner_id, currency_price, created_at,
                         sabanas, mantas, almohadas, toilettes, shampoo, toallas, secador_pelo,
                         lavarropas, cambio_toallas, utensillos_cocina, vajilla, freezer,
                         televisor, radio, tv, cable, internet, parlantes,
@@ -109,7 +109,7 @@ async def create_quinta(request: Request):
                         cancha_basquet, cancha_tenis, cancha_padel, hamacas
                     ) VALUES (
                         :id, :title, :address, :latitude, :length, :city, :guests, :bedrooms, :bathrooms,
-                        :environments, :beds, :price, :description, :owner_id, :currency_price, NOW(),
+                        :environments, :status, :payment_type, :beds, :price, :description, :owner_id, :currency_price, NOW(),
                         :sabanas, :mantas, :almohadas, :toilettes, :shampoo, :toallas, :secador_pelo,
                         :lavarropas, :cambio_toallas, :utensillos_cocina, :vajilla, :freezer,
                         :televisor, :radio, :tv, :cable, :internet, :parlantes,
@@ -123,6 +123,7 @@ async def create_quinta(request: Request):
                     "id": quinta_id,
                     "title": quinta_data.title, "address": quinta_data.address,
                     "latitude": quinta_data.latitude, "length": quinta_data.length,
+                    "status": quinta_data.status, "payment_type": quinta_data.payment_type,
                     "city": quinta_data.city, "guests": quinta_data.guests,
                     "bedrooms": quinta_data.bedrooms, "bathrooms": quinta_data.bathrooms,
                     "environments": quinta_data.environments, "beds": quinta_data.beds,

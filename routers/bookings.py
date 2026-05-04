@@ -100,12 +100,12 @@ async def create_booking(data: BookingCreate):
                 text("""
                     INSERT INTO bookings (
                         id, quinta_id, guest_id, owner_id, check_in, check_out,
-                        quinta_title, quinta_address, quinta_main_image,
+                        quinta_title, payment_type, quinta_address, quinta_main_image,
                         guest_count, message, currency_price, amount, status,
                         created_at, updated_at
                     ) VALUES (
                         :id, :quinta_id, :guest_id, :owner_id, :check_in, :check_out,
-                        :quinta_title, :quinta_address, :quinta_main_image,
+                        :quinta_title, :payment_type, :quinta_address, :quinta_main_image,
                         :guest_count, :message, :currency_price, :amount, :status,
                         NOW(), NOW()
                     )
@@ -122,6 +122,7 @@ async def create_booking(data: BookingCreate):
                     "currency_price": data.currency_price,
                     "amount": data.amount,
                     "status": data.status,
+                    "payment_type": data.payment_type,
                     "quinta_title": data.quinta_title,
                     "quinta_address": data.quinta_address,
                     "quinta_main_image": data.quinta_main_image,

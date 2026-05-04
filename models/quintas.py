@@ -7,6 +7,8 @@ class QuintaCreate(BaseModel):
     address: str
     latitude: float
     length: float
+    status: str
+    payment_type: Optional[str] = None
     city: str
     guests: int
     bedrooms: int
@@ -67,6 +69,8 @@ class QuintaUpdate(BaseModel):
     address: Optional[str] = None
     latitude: Optional[float] = None
     length: Optional[float] = None
+    status: str
+    payment_type: Optional[str] = None
     city: Optional[str] = None
     guests: Optional[int] = None
     bedrooms: Optional[int] = None
