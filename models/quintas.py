@@ -124,3 +124,6 @@ class QuintaUpdate(BaseModel):
     cancha_tenis: Optional[bool] = None
     cancha_padel: Optional[bool] = None
     hamacas: Optional[bool] = None
+
+class QuintaStatusUpdate(BaseModel):
+    status: str

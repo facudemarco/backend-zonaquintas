@@ -7,7 +7,7 @@ from sqlalchemy import text
 from Database.getConnection import engine
 import uuid
 import json
-from models.quintas import QuintaCreate, QuintaUpdate
+from models.quintas import QuintaCreate, QuintaUpdate, QuintaStatusUpdate
 
 router = APIRouter()
 
@@ -242,6 +242,22 @@ async def get_quinta_by_id(quinta_id: str):
             data["main_image"] = main[0] if main else None
             data["images"] = list(imgs)
             return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.patch("/quintas/{quinta_id}/status", tags=["Quintas"])
+async def update_quinta_status(quinta_id: str, data: QuintaStatusUpdate):
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("UPDATE quintas SET status = :status, WHERE id = :id"),
+                {"status": data.status, "id": quinta_id},
+            )
+            if result.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Quinta no encontrada.")
+        return {"message": "Estado de quinta actualizado."}
     except HTTPException:
         raise
     except Exception as e:
