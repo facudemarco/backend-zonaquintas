@@ -14,6 +14,12 @@ class UserRegister(BaseModel):
     owner_location: Optional[str] = None
     average_opinions: Optional[float] = None
     
+    #Rebill subscription
+    rebill_customer_id: Optional[str] = None
+    rebill_subscription_id: Optional[str] = None
+    membership_status: Optional[str] = None
+    membership_expires_at: Optional[date] = None
+    
     # 1:N Relation arrays
     languages: Optional[List[str]] = None
     opinions: Optional[List[str]] = None
@@ -30,6 +36,13 @@ class UserUpdate(BaseModel):
     owner_time: Optional[str] = None
     owner_location: Optional[str] = None
     average_opinions: Optional[float] = None
+        
+    #Rebill subscription
+    rebill_customer_id: Optional[str] = None
+    rebill_subscription_id: Optional[str] = None
+    membership_status: Optional[str] = None
+    membership_expires_at: Optional[date] = None
+    
     
     # 1:N Relation arrays
     languages: Optional[List[str]] = None
