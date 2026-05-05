@@ -11,10 +11,8 @@ origins = [
     "http://localhost:3009",
     "http://localhost:3000",
     "https://zonaquintas.com",
-    "zonaquintas-website.vercel.app",
+    "https://zonaquintas-website.vercel.app",
     "https://www.zonaquintas.com",
-    "http://zonaquintas.com",
-    "http://www.zonaquintas.com",
 ]
 
 app.add_middleware( 

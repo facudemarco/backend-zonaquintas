@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Response, HTTPException, Depends
+from fastapi import APIRouter, Response, Request, HTTPException, Depends
 from pydantic import BaseModel
 from utils.security import create_access_token, get_current_user
 from models.users import UserRegister, UserUpdate
@@ -6,6 +6,7 @@ from Database.getConnection import engine
 from sqlalchemy import text
 from passlib.context import CryptContext
 import uuid
+
 
 router = APIRouter()
 
@@ -252,6 +253,7 @@ async def get_all_users():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
 @router.get("/user_by_id", tags=["Auth & Users"])
 async def get_users(id: str = None):
     try:
@@ -311,6 +313,34 @@ async def get_users(id: str = None):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@router.patch("/users/{user_id}/membership", tags=["Auth & Users"])
+async def update_membership(user_id: str, data: dict, request: Request):
+    fields = []
+    params = {"user_id": user_id}
+
+    allowed = [
+        "rebill_customer_id",
+        "rebill_subscription_id",
+        "membership_status",
+        "membership_expires_at",
+    ]
+
+    for field in allowed:
+        if field in data:
+            fields.append(f"{field} = :{field}")
+            params[field] = data[field]
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="Sin campos para actualizar")
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"UPDATE users SET {', '.join(fields)} WHERE id = :user_id"),
+            params
+        )
+
+    return {"ok": True}
 
 @router.delete("/user/{user_id}", tags=["Auth & Users"])
 async def delete_user(user_id: str):

@@ -135,6 +135,50 @@ async def create_booking(data: BookingCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/getBookingsInDate", tags=["Bookings"])
+async def get_bookings():
+    """
+    Devuelve todas las reservas actualmente en curso.
+    """
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT b.*, q.title AS quinta_title
+                    FROM bookings b
+                    LEFT JOIN quintas q ON b.quinta_id = q.id
+                    WHERE CURRENT_DATE >= b.check_in
+                      AND CURRENT_DATE < b.check_out
+                      AND b.status != 'rejected'
+                      AND b.status != 'cancelled'
+                    ORDER BY b.created_at DESC
+                """)
+            ).mappings().all()
+
+        return [dict(row) for row in rows]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@router.get("/getBookingsFinished", tags=["Bookings"])
+async def get_bookings_finished():
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT b.*, q.title AS quinta_title
+                    FROM bookings b
+                    LEFT JOIN quintas q ON b.quinta_id = q.id
+                    WHERE b.status = 'FINISHED'
+                    ORDER BY b.created_at DESC
+                """),
+            ).mappings().all()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/bookings/guest/{guest_id}", tags=["Bookings"])
 async def get_guest_bookings(guest_id: str):
     try:
