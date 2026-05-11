@@ -4,6 +4,7 @@ from datetime import date
 
 class UserRegister(BaseModel):
     email: EmailStr
+    name: Optional[str] = None
     password: str
     phone: Optional[int] = None
     date_of_birth: Optional[date] = None
@@ -27,6 +28,7 @@ class UserRegister(BaseModel):
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
+    name: Optional[str] = None
     password: Optional[str] = None
     phone: Optional[int] = None
     date_of_birth: Optional[date] = None
@@ -36,7 +38,7 @@ class UserUpdate(BaseModel):
     owner_time: Optional[str] = None
     owner_location: Optional[str] = None
     average_opinions: Optional[float] = None
-        
+    
     #Rebill subscription
     rebill_customer_id: Optional[str] = None
     rebill_subscription_id: Optional[str] = None

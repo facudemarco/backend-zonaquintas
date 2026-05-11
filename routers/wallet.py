@@ -101,6 +101,7 @@ async def get_wallet_dashboard(owner_id: str):
                     "date": tx["created_at"].strftime("%d/%m/%Y"),
                     "quinta_name": tx["quinta_title"] if tx["quinta_title"] else "N/A",
                     "amount": float(tx["amount"]),
+                    "booking_id": tx["booking_id"],
                     "currency": tx["currency"],
                     "status": tx["status"],
                     "description": tx["description"]
