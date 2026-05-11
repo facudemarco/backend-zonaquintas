@@ -54,8 +54,8 @@ async def register_user(data: UserRegister):
                 
             conn.execute(
                 text("""
-                    INSERT INTO users (id, email, password_hash, phone, date_of_birth, address, description, role, owner_time, owner_location, average_opinions, created_at)
-                    VALUES (:id, :email, :pw, :phone, :dob, :addr, :desc, :role, :otime, :oloc, :avg_op, NOW())
+                    INSERT INTO users (id, email, password_hash, name, phone, date_of_birth, address, description, role, owner_time, owner_location, average_opinions, created_at)
+                    VALUES (:id, :email, :pw, :name, :phone, :dob, :addr, :desc, :role, :otime, :oloc, :avg_op, NOW())
                 """),
                 {
                     "id": user_id, 
@@ -66,6 +66,7 @@ async def register_user(data: UserRegister):
                     "addr": data.address,
                     "desc": data.description,
                     "role": data.role,
+                    "name": data.name,
                     "otime": data.owner_time,
                     "oloc": data.owner_location,
                     "avg_op": data.average_opinions
@@ -158,6 +159,7 @@ async def update_user(user_id: str, data: UserUpdate):
                         date_of_birth = COALESCE(:dob, date_of_birth),
                         address = COALESCE(:addr, address),
                         description = COALESCE(:desc, description),
+                        name = COALESCE(:name, name),
                         role = COALESCE(:role, role),
                         owner_time = COALESCE(:otime, owner_time),
                         owner_location = COALESCE(:oloc, owner_location),
@@ -171,6 +173,7 @@ async def update_user(user_id: str, data: UserUpdate):
                     "dob": data.date_of_birth,
                     "addr": data.address,
                     "desc": data.description,
+                    "name": data.name,
                     "role": data.role,
                     "otime": data.owner_time,
                     "oloc": data.owner_location,
