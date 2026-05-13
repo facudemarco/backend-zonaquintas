@@ -252,7 +252,7 @@ async def update_quinta_status(quinta_id: str, data: QuintaStatusUpdate):
     try:
         with engine.begin() as conn:
             result = conn.execute(
-                text("UPDATE quintas SET status = :status, WHERE id = :id"),
+                text("UPDATE quintas SET status = :status WHERE id = :id"),
                 {"status": data.status, "id": quinta_id},
             )
             if result.rowcount == 0:
