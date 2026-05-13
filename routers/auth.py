@@ -1,14 +1,51 @@
-from fastapi import APIRouter, Response, Request, HTTPException, Depends
+from typing import List, Optional
+from fastapi import APIRouter, Response, Request, HTTPException, Depends, UploadFile
 from pydantic import BaseModel
 from utils.security import create_access_token, get_current_user
 from models.users import UserRegister, UserUpdate
 from Database.getConnection import engine
 from sqlalchemy import text
 from passlib.context import CryptContext
+from PIL import Image
 import uuid
+import os
+import shutil
 
 
 router = APIRouter()
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+IMAGES_DIR = os.path.join(PROJECT_ROOT, "images")
+DOMAIN_URL = os.getenv("DOMAIN_URL", "https://zonaquintas.com/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api/images")
+
+
+def save_user_image_to_disk(upload_file: UploadFile) -> str:
+    """Guarda una imagen de usuario en disco comprimiéndola y retorna su URL pública."""
+    if not os.path.exists(IMAGES_DIR):
+        os.makedirs(IMAGES_DIR, exist_ok=True)
+
+    ext = os.path.splitext(upload_file.filename or "file.jpg")[1].lower()
+    fname = f"{uuid.uuid4()}{ext}"
+    path = os.path.join(IMAGES_DIR, fname)
+
+    try:
+        image = Image.open(upload_file.file)
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+        image.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
+        if ext in [".jpg", ".jpeg"]:
+            image.save(path, format="JPEG", optimize=True, quality=80)
+        elif ext == ".png":
+            image.save(path, format="PNG", optimize=True)
+        else:
+            image.save(path)
+    except Exception:
+        upload_file.file.seek(0)
+        with open(path, "wb") as buf:
+            shutil.copyfileobj(upload_file.file, buf)
+
+    return f"{DOMAIN_URL}/{fname}"
+
 
 # Setup Passlib for secure hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -222,6 +259,8 @@ async def update_user(user_id: str, data: UserUpdate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+
+    
     
 @router.get("/users", tags=["Auth & Users"])
 async def get_all_users():
@@ -246,9 +285,9 @@ async def get_all_users():
                 u_dict["opinions"] = [row.opinions for row in opinions]
                 
                 pictures = conn.execute(
-                    text("SELECT url FROM users_picture WHERE user_id = :id"), {"id": uid}
+                    text("SELECT id, url FROM users_picture WHERE user_id = :id"), {"id": uid}
                 ).fetchall()
-                u_dict["pictures"] = [row.url for row in pictures]
+                u_dict["pictures"] = [{"id": row.id, "url": row.url} for row in pictures]
                 
                 result.append(u_dict)
             return result
@@ -281,9 +320,9 @@ async def get_users(id: str = None):
                 user_dict["opinions"] = [row.opinions for row in opinions]
                 
                 pictures = conn.execute(
-                    text("SELECT url FROM users_picture WHERE user_id = :id"), {"id": id}
+                    text("SELECT id, url FROM users_picture WHERE user_id = :id"), {"id": id}
                 ).fetchall()
-                user_dict["pictures"] = [row.url for row in pictures]
+                user_dict["pictures"] = [{"id": row.id, "url": row.url} for row in pictures]
                 
                 return user_dict
             else:
@@ -306,9 +345,9 @@ async def get_users(id: str = None):
                     u_dict["opinions"] = [row.opinions for row in opinions]
                     
                     pictures = conn.execute(
-                        text("SELECT url FROM users_picture WHERE user_id = :id"), {"id": uid}
+                        text("SELECT id, url FROM users_picture WHERE user_id = :id"), {"id": uid}
                     ).fetchall()
-                    u_dict["pictures"] = [row.url for row in pictures]
+                    u_dict["pictures"] = [{"id": row.id, "url": row.url} for row in pictures]
                     
                     result.append(u_dict)
                 return result
@@ -390,6 +429,86 @@ async def delete_user(user_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.put(
+    "/users/{user_id}/images",
+    tags=["Auth & Users"],
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "images": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                                "description": "Imágenes del usuario a agregar"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
+async def update_user_images(user_id: str, request: Request):
+    try:
+        form = await request.form()
+        images: List[UploadFile] = form.getlist("images")  # type: ignore
+
+        with engine.begin() as conn:
+            if not conn.execute(text("SELECT id FROM users WHERE id = :id"), {"id": user_id}).fetchone():
+                raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+            uploaded_urls = []
+            for img in images:
+                if getattr(img, "filename", None):
+                    public_url = save_user_image_to_disk(img)
+                    pic_id = str(uuid.uuid4())
+                    conn.execute(
+                        text("INSERT INTO users_picture (id, user_id, url) VALUES (:id, :user_id, :url)"),
+                        {"id": pic_id, "user_id": user_id, "url": public_url}
+                    )
+                    uploaded_urls.append({"id": pic_id, "url": public_url})
+
+        return {"message": "Imágenes de usuario actualizadas exitosamente.", "images": uploaded_urls}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/users/{user_id}/images/{image_id}", tags=["Auth & Users"])
+async def delete_user_picture(user_id: str, image_id: str):
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                text("SELECT id, url FROM users_picture WHERE id = :id AND user_id = :user_id"),
+                {"id": image_id, "user_id": user_id}
+            ).fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Imagen no encontrada para este usuario.")
+
+            # Eliminar archivo físico del disco
+            url = row.url
+            if url:
+                file_path = os.path.join(IMAGES_DIR, os.path.basename(url))
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+
+            conn.execute(
+                text("DELETE FROM users_picture WHERE id = :id AND user_id = :user_id"),
+                {"id": image_id, "user_id": user_id}
+            )
+
+        return {"message": "Imagen de usuario eliminada exitosamente."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/logout", tags=["Auth & Users"])
 async def logout(response: Response):
