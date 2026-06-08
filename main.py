@@ -24,7 +24,8 @@ app.add_middleware(
     expose_headers=["Set-Cookie"],
 )
 
-IMAGES_DIR = os.path.join(os.getcwd(), "images")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
 app.mount("/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api/images", StaticFiles(directory=IMAGES_DIR), name="images")
 
 @app.get("/")

@@ -7,6 +7,7 @@ from Database.getConnection import engine
 from sqlalchemy import text
 from passlib.context import CryptContext
 from PIL import Image
+from urllib.parse import urlparse
 import uuid
 import os
 import shutil
@@ -17,6 +18,14 @@ router = APIRouter()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMAGES_DIR = os.path.join(PROJECT_ROOT, "images")
 DOMAIN_URL = os.getenv("DOMAIN_URL", "https://zonaquintas.com/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api/images")
+
+
+def get_image_filename_from_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        return os.path.basename(parsed.path) or ""
+    except Exception:
+        return ""
 
 
 def save_user_image_to_disk(upload_file: UploadFile) -> str:
@@ -494,9 +503,15 @@ async def delete_user_picture(user_id: str, image_id: str):
             # Eliminar archivo físico del disco
             url = row.url
             if url:
-                file_path = os.path.join(IMAGES_DIR, os.path.basename(url))
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                file_name = get_image_filename_from_url(url)
+                if file_name:
+                    file_path = os.path.join(IMAGES_DIR, file_name)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                    else:
+                        print(f"Imagen no encontrada en disco para eliminación: {file_path}")
+                else:
+                    print(f"URL de imagen inválida para eliminación: {url}")
 
             conn.execute(
                 text("DELETE FROM users_picture WHERE id = :id AND user_id = :user_id"),

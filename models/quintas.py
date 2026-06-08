@@ -57,6 +57,7 @@ class QuintaCreate(BaseModel):
     hamacas_paraguayas: Optional[bool] = False
     arboleda: Optional[bool] = False
     cancha_futbol: Optional[bool] = False
+    pet: Optional[bool] = False
     piscina: Optional[bool] = False
     cancha_basquet: Optional[bool] = False
     cancha_tenis: Optional[bool] = False
@@ -118,6 +119,7 @@ class QuintaUpdate(BaseModel):
     hogar: Optional[bool] = None
     hamacas_paraguayas: Optional[bool] = None
     arboleda: Optional[bool] = None
+    pet: Optional[bool] = False
     cancha_futbol: Optional[bool] = None
     piscina: Optional[bool] = None
     cancha_basquet: Optional[bool] = None
