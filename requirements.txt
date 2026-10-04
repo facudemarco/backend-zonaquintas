@@ -12,3 +12,4 @@ pydantic[email]
 pillow
 pytest
 httpx
+tzdata
