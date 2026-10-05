@@ -16,6 +16,7 @@ from utils.security import get_current_user
 
 router = APIRouter()
 
+# Rebill marks an approved balance payment as "finished" (deposit uses "paid").
 PAID_STATUSES = {"PAID", "APPROVED", "APROBADO", "PAGADO", "COMPLETADO", "COMPLETED", "FINISHED"}
 
 
