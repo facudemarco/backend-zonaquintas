@@ -1,5 +1,7 @@
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+from fastapi import APIRouter, HTTPException, Request, UploadFile, Depends, Query
 import os
 import shutil
 from PIL import Image
@@ -8,8 +10,16 @@ from Database.getConnection import engine
 import uuid
 import json
 from models.quintas import QuintaCreate, QuintaUpdate, QuintaStatusUpdate
+from pydantic import BaseModel
+from services.availability import validate_rental_period, lock_quinta, blocking_bookings
+from utils.security import get_current_user
 
 router = APIRouter()
+
+
+class RentalPeriodUpdate(BaseModel):
+    rental_start_date: date
+    rental_end_date: date
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMAGES_DIR = os.path.join(PROJECT_ROOT, "images")
@@ -77,7 +87,7 @@ def save_image_to_disk(upload_file: UploadFile) -> str:
         }
     }
 )
-async def create_quinta(request: Request):
+async def create_quinta(request: Request, user_id: str = Depends(get_current_user)):
     try:
         form = await request.form()
 
@@ -89,6 +99,12 @@ async def create_quinta(request: Request):
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"JSON inválido en 'data': {e}")
 
+        if quinta_data.owner_id != user_id:
+            raise HTTPException(status_code=403, detail="No podés publicar para otro propietario.")
+        validate_rental_period(quinta_data.rental_start_date, quinta_data.rental_end_date, required=True)
+        if quinta_data.rental_start_date < datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).date():
+            raise HTTPException(422, "El período de alquiler no puede empezar en el pasado.")
+
         main_image: Optional[UploadFile] = form.get("main_image")  # type: ignore
         images: List[UploadFile] = form.getlist("images")  # type: ignore
 
@@ -99,7 +115,7 @@ async def create_quinta(request: Request):
                 text("""
                     INSERT INTO quintas (
                         id, title, address, latitude, length, city, guests, bedrooms, bathrooms,
-                        environments, status, payment_type, beds, price, description, owner_id, currency_price, created_at,
+                        environments, status, payment_type, beds, price, description, owner_id, currency_price, rental_start_date, rental_end_date, created_at,
                         sabanas, mantas, almohadas, toilettes, shampoo, toallas, secador_pelo,
                         lavarropas, cambio_toallas, utensillos_cocina, vajilla, freezer,
                         televisor, radio, tv, cable, internet, pet, parlantes,
@@ -109,7 +125,7 @@ async def create_quinta(request: Request):
                         cancha_basquet, cancha_tenis, cancha_padel, hamacas
                     ) VALUES (
                         :id, :title, :address, :latitude, :length, :city, :guests, :bedrooms, :bathrooms,
-                        :environments, :status, :payment_type, :beds, :price, :description, :owner_id, :currency_price, NOW(),
+                        :environments, :status, :payment_type, :beds, :price, :description, :owner_id, :currency_price, :rental_start_date, :rental_end_date, NOW(),
                         :sabanas, :mantas, :almohadas, :toilettes, :shampoo, :toallas, :secador_pelo,
                         :lavarropas, :cambio_toallas, :utensillos_cocina, :vajilla, :freezer,
                         :televisor, :radio, :tv, :cable, :internet, :pet, :parlantes,
@@ -129,6 +145,7 @@ async def create_quinta(request: Request):
                     "environments": quinta_data.environments, "beds": quinta_data.beds,
                     "price": quinta_data.price, "description": quinta_data.description,
                     "owner_id": quinta_data.owner_id, "currency_price": quinta_data.currency_price,
+                    "rental_start_date": quinta_data.rental_start_date, "rental_end_date": quinta_data.rental_end_date,
                     "sabanas": quinta_data.sabanas, "mantas": quinta_data.mantas,
                     "almohadas": quinta_data.almohadas, "toilettes": quinta_data.toilettes,
                     "shampoo": quinta_data.shampoo, "toallas": quinta_data.toallas,
@@ -220,6 +237,55 @@ async def get_address_from_quintas():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/quintas/{quinta_id}/availability", tags=["Quintas"])
+async def get_quinta_availability(
+    quinta_id: str,
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+):
+    if to_date <= from_date or (to_date - from_date).days > 366:
+        raise HTTPException(422, "El período consultado debe estar entre 1 y 366 días.")
+    with engine.begin() as conn:
+        quinta = conn.execute(text("""
+            SELECT id, rental_start_date, rental_end_date FROM quintas WHERE id = :id
+        """), {"id": quinta_id}).mappings().first()
+        if not quinta:
+            raise HTTPException(404, "Quinta no encontrada.")
+        blocked = blocking_bookings(conn, quinta_id, from_date, to_date)
+        return {
+            "quinta_id": quinta_id,
+            "rental_start_date": quinta["rental_start_date"],
+            "rental_end_date": quinta["rental_end_date"],
+            "blocked": [{"check_in": b["check_in"], "check_out": b["check_out"]} for b in blocked],
+        }
+
+
+@router.patch("/quintas/{quinta_id}/rental-period", tags=["Quintas"])
+async def update_rental_period(
+    quinta_id: str, data: RentalPeriodUpdate, user_id: str = Depends(get_current_user),
+):
+    validate_rental_period(data.rental_start_date, data.rental_end_date, required=True)
+    with engine.begin() as conn:
+        quinta = lock_quinta(conn, quinta_id)
+        if not quinta:
+            raise HTTPException(404, "Quinta no encontrada.")
+        if quinta["owner_id"] != user_id:
+            raise HTTPException(403, "La quinta no pertenece a este usuario.")
+        outside = conn.execute(text("""
+            SELECT id FROM bookings WHERE quinta_id = :id
+              AND (check_in < :start OR check_out > :end)
+              AND (status IS NULL OR LOWER(status) NOT IN
+                   ('rejected', 'cancelled', 'rechazado', 'cancelado'))
+            LIMIT 1
+        """), {"id": quinta_id, "start": data.rental_start_date, "end": data.rental_end_date}).first()
+        if outside:
+            raise HTTPException(409, "Hay reservas vigentes fuera del nuevo período.")
+        conn.execute(text("""
+            UPDATE quintas SET rental_start_date = :start, rental_end_date = :end WHERE id = :id
+        """), {"id": quinta_id, "start": data.rental_start_date, "end": data.rental_end_date})
+    return {"message": "Período de alquiler actualizado."}
+
 
 @router.get("/quintas/{quinta_id}", tags=["Quintas"])
 async def get_quinta_by_id(quinta_id: str):
@@ -320,9 +386,14 @@ async def delete_quinta(quinta_id: str):
 
 
 @router.put("/quintas/{quinta_id}", tags=["Quintas"])
-async def update_quinta(quinta_id: str, data: QuintaUpdate):
+async def update_quinta(quinta_id: str, data: QuintaUpdate, user_id: str = Depends(get_current_user)):
     try:
         with engine.begin() as conn:
+            quinta = lock_quinta(conn, quinta_id)
+            if not quinta:
+                raise HTTPException(404, "Quinta no encontrada.")
+            if quinta["owner_id"] != user_id or (data.owner_id and data.owner_id != user_id):
+                raise HTTPException(403, "La quinta no pertenece a este usuario.")
             result = conn.execute(
                 text("""
                     UPDATE quintas SET

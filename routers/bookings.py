@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import text
 
 from Database.getConnection import engine
@@ -11,10 +11,13 @@ from models.bookings import (
     BookingPaymentUpdate,
     BookingStatusUpdate,
 )
+from services.availability import lock_quinta, ensure_available
+from utils.security import get_current_user
 
 router = APIRouter()
 
-PAID_STATUSES = {"PAID", "APPROVED", "APROBADO", "PAGADO", "COMPLETADO", "COMPLETED"}
+# Rebill marks an approved balance payment as "finished" (deposit uses "paid").
+PAID_STATUSES = {"PAID", "APPROVED", "APROBADO", "PAGADO", "COMPLETADO", "COMPLETED", "FINISHED"}
 
 
 def _row_to_dict(row):
@@ -85,12 +88,18 @@ def _create_wallet_transaction_for_payment(conn, payment_id: str):
 
 
 @router.post("/bookings", tags=["Bookings"])
-async def create_booking(data: BookingCreate):
+async def create_booking(data: BookingCreate, user_id: str = Depends(get_current_user)):
     try:
+        if data.guest_id != user_id:
+            raise HTTPException(403, "No podés reservar para otro usuario.")
+        if (data.status or "pending").lower() not in ("pending", "pendiente"):
+            raise HTTPException(422, "La reserva debe iniciar pendiente.")
         booking_id = str(uuid.uuid4())
         with engine.begin() as conn:
-            if not conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": data.quinta_id}).fetchone():
-                raise HTTPException(status_code=404, detail="Quinta no encontrada.")
+            quinta = lock_quinta(conn, data.quinta_id)
+            if quinta and data.owner_id != quinta["owner_id"]:
+                raise HTTPException(status_code=422, detail="El propietario no corresponde a la quinta.")
+            ensure_available(conn, quinta, data.check_in, data.check_out)
             if not conn.execute(text("SELECT id FROM users WHERE id = :id"), {"id": data.guest_id}).fetchone():
                 raise HTTPException(status_code=404, detail="Usuario invitado no encontrado.")
             if not conn.execute(text("SELECT id FROM users WHERE id = :id"), {"id": data.owner_id}).fetchone():
@@ -199,7 +208,9 @@ async def get_guest_bookings(guest_id: str):
 
 
 @router.get("/bookings/owner/{owner_id}", tags=["Bookings"])
-async def get_owner_bookings(owner_id: str):
+async def get_owner_bookings(owner_id: str, user_id: str = Depends(get_current_user)):
+    if user_id != owner_id:
+        raise HTTPException(403, "No podés consultar reservas de otro propietario.")
     try:
         with engine.begin() as conn:
             rows = conn.execute(
@@ -250,7 +261,26 @@ async def get_booking(booking_id: str):
 @router.patch("/bookings/{booking_id}/status", tags=["Bookings"])
 async def update_booking_status(booking_id: str, data: BookingStatusUpdate):
     try:
+        # Resolve the property outside the write transaction: in MySQL REPEATABLE
+        # READ a plain SELECT before the quinta lock would freeze an old snapshot.
+        with engine.connect() as lookup_conn:
+            quinta_id = lookup_conn.execute(
+                text("SELECT quinta_id FROM bookings WHERE id = :id"), {"id": booking_id},
+            ).scalar()
+        if not quinta_id:
+            raise HTTPException(status_code=404, detail="Reserva no encontrada.")
         with engine.begin() as conn:
+            quinta = lock_quinta(conn, quinta_id)
+            suffix = " FOR UPDATE" if conn.dialect.name == "mysql" else ""
+            existing = conn.execute(text(
+                "SELECT quinta_id, check_in, check_out, status FROM bookings WHERE id = :id" + suffix
+            ), {"id": booking_id}).mappings().first()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Reserva no encontrada.")
+            if data.status.lower() in ("paid", "finished") and str(existing["status"]).lower() in ("rejected", "cancelled", "rechazado", "cancelado"):
+                raise HTTPException(409, "La reserva fue liberada; el cobro requiere conciliación.")
+            if data.status.lower() not in ("rejected", "cancelled", "rechazado", "cancelado"):
+                ensure_available(conn, quinta, existing["check_in"], existing["check_out"], booking_id)
             result = conn.execute(
                 text("UPDATE bookings SET status = :status, updated_at = NOW() WHERE id = :id"),
                 {"status": data.status, "id": booking_id},

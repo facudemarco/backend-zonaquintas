@@ -1,8 +1,18 @@
 from pydantic import BaseModel
 from typing import Optional
+from datetime import date
+from pydantic import model_validator
 
 
 class QuintaCreate(BaseModel):
+    rental_start_date: date
+    rental_end_date: date
+
+    @model_validator(mode="after")
+    def valid_period(self):
+        from services.availability import validate_rental_period
+        validate_rental_period(self.rental_start_date, self.rental_end_date, required=True)
+        return self
     title: str
     address: str
     latitude: float
