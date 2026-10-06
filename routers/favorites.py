@@ -1,16 +1,19 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
 from Database.getConnection import engine
 from models.favorites import FavoriteCreate
+from utils.security import get_current_user
 
 router = APIRouter()
 
 
 @router.post("/favorites", tags=["Favorites"])
-async def add_favorite(data: FavoriteCreate):
+async def add_favorite(data: FavoriteCreate, current_user: str = Depends(get_current_user)):
+    if current_user != data.user_id:
+        raise HTTPException(403, "Acceso denegado.")
     try:
         favorite_id = str(uuid.uuid4())
         with engine.begin() as conn:
@@ -37,7 +40,9 @@ async def add_favorite(data: FavoriteCreate):
 
 
 @router.get("/favorites/{user_id}", tags=["Favorites"])
-async def get_user_favorites(user_id: str):
+async def get_user_favorites(user_id: str, current_user: str = Depends(get_current_user)):
+    if current_user != user_id:
+        raise HTTPException(403, "Acceso denegado.")
     try:
         with engine.begin() as conn:
             rows = conn.execute(
@@ -58,7 +63,9 @@ async def get_user_favorites(user_id: str):
 
 
 @router.delete("/favorites/{user_id}/{quinta_id}", tags=["Favorites"])
-async def remove_favorite(user_id: str, quinta_id: str):
+async def remove_favorite(user_id: str, quinta_id: str, current_user: str = Depends(get_current_user)):
+    if current_user != user_id:
+        raise HTTPException(403, "Acceso denegado.")
     try:
         with engine.begin() as conn:
             result = conn.execute(

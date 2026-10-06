@@ -170,6 +170,8 @@ async def login(data: LoginData, response: Response):
             # Token con vigencia de 60 dias
             token = create_access_token(data={"user_id": user.id})
 
+
+            
             response.set_cookie(
                 key="access_token",
                 value=f"Bearer {token}",

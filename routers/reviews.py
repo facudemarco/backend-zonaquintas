@@ -1,28 +1,29 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
 from Database.getConnection import engine
 from models.reviews import ReviewCreate
+from utils.security import get_current_user
+from services.review_eligibility import can_review
 
 router = APIRouter()
 
-REVIEWABLE_STATUSES = {"COMPLETADO", "FINALIZADO", "COMPLETED", "FINISHED"}
-
-
 @router.post("/reviews", tags=["Reviews"])
-async def create_review(data: ReviewCreate):
+async def create_review(data: ReviewCreate, user_id: str = Depends(get_current_user)):
     try:
         review_id = str(uuid.uuid4())
         with engine.begin() as conn:
             booking = conn.execute(
-                text("SELECT id, owner_id, status FROM bookings WHERE id = :id"),
+                text("SELECT id, owner_id, guest_id, check_out, status FROM bookings WHERE id = :id" + (" FOR UPDATE" if conn.dialect.name == "mysql" else "")),
                 {"id": data.booking_id},
             ).fetchone()
             if not booking:
                 raise HTTPException(status_code=404, detail="Reserva no encontrada.")
-            if booking.status and booking.status.upper() not in REVIEWABLE_STATUSES:
+            if booking.guest_id != user_id:
+                raise HTTPException(403, "Solo el huesped de la reserva puede calificar.")
+            if not can_review(dict(booking._mapping)):
                 raise HTTPException(status_code=409, detail="La reserva todavia no esta finalizada.")
 
             existing = conn.execute(
@@ -35,7 +36,7 @@ async def create_review(data: ReviewCreate):
             conn.execute(
                 text("""
                     INSERT INTO reviews (id, booking_id, stars, review_text, created_at)
-                    VALUES (:id, :booking_id, :stars, :review_text, NOW())
+                    VALUES (:id, :booking_id, :stars, :review_text, CURRENT_TIMESTAMP)
                 """),
                 {
                     "id": review_id,
