@@ -656,3 +656,150 @@ async def admin_moderation_events(
             LIMIT :limit
         """), params).mappings().all()
     return [dict(row) for row in rows]
+
+
+class AdminPayoutCreate(BaseModel):
+    currency: Optional[str] = None
+
+
+@router.get("/liquidations")
+async def admin_liquidations(
+    _: str = Depends(require_admin),
+):
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT
+                t.owner_id,
+                u.name AS owner_name,
+                u.email AS owner_email,
+                t.currency,
+                SUM(CASE WHEN t.status = 'RETENIDO' THEN t.amount ELSE 0 END) AS retained_amount,
+                SUM(CASE WHEN t.status = 'DISPONIBLE' THEN t.amount ELSE 0 END) AS available_amount,
+                SUM(CASE WHEN t.status = 'ENTREGADO' THEN t.amount ELSE 0 END) AS delivered_amount,
+                SUM(CASE WHEN t.status = 'REEMBOLSADO' THEN t.amount ELSE 0 END) AS refunded_amount,
+                COUNT(*) AS transaction_count,
+                MAX(t.updated_at) AS last_movement_at
+            FROM transactions t
+            LEFT JOIN users u ON u.id = t.owner_id
+            GROUP BY t.owner_id, u.name, u.email, t.currency
+            ORDER BY available_amount DESC, retained_amount DESC
+        """)).mappings().all()
+    return [dict(row) for row in rows]
+
+
+@router.get("/liquidations/{owner_id}")
+async def admin_liquidation_detail(owner_id: str, _: str = Depends(require_admin)):
+    with engine.connect() as conn:
+        owner = conn.execute(text("""
+            SELECT id, name, email, phone, average_opinions
+            FROM users WHERE id = :id
+        """), {"id": owner_id}).mappings().first()
+        if not owner:
+            raise HTTPException(404, "Propietario no encontrado.")
+
+        summary = conn.execute(text("""
+            SELECT
+                currency,
+                SUM(CASE WHEN status = 'RETENIDO' THEN amount ELSE 0 END) AS retained_amount,
+                SUM(CASE WHEN status = 'DISPONIBLE' THEN amount ELSE 0 END) AS available_amount,
+                SUM(CASE WHEN status = 'ENTREGADO' THEN amount ELSE 0 END) AS delivered_amount,
+                SUM(CASE WHEN status = 'CANCELADO' THEN amount ELSE 0 END) AS cancelled_amount,
+                SUM(CASE WHEN status = 'REEMBOLSADO' THEN amount ELSE 0 END) AS refunded_amount,
+                COUNT(*) AS transaction_count
+            FROM transactions
+            WHERE owner_id = :id
+            GROUP BY currency
+            ORDER BY currency
+        """), {"id": owner_id}).mappings().all()
+
+        transactions = [dict(row) for row in conn.execute(text("""
+            SELECT t.*, q.title AS quinta_title,
+                   client.name AS client_name, client.email AS client_email
+            FROM transactions t
+            LEFT JOIN quintas q ON q.id = t.quinta_id
+            LEFT JOIN users client ON client.id = t.client_id
+            WHERE t.owner_id = :id
+            ORDER BY t.created_at DESC
+        """), {"id": owner_id}).mappings()]
+
+        payouts = [dict(row) for row in conn.execute(text("""
+            SELECT p.*, admin.name AS admin_name, admin.email AS admin_email
+            FROM admin_payouts p
+            LEFT JOIN users admin ON admin.id = p.admin_id
+            WHERE p.owner_id = :id
+            ORDER BY p.created_at DESC
+        """), {"id": owner_id}).mappings()]
+
+    return {
+        "owner": dict(owner),
+        "summary": [dict(row) for row in summary],
+        "transactions": transactions,
+        "payouts": payouts,
+    }
+
+
+@router.post("/liquidations/{owner_id}/payout")
+async def admin_create_payout(
+    owner_id: str,
+    data: AdminPayoutCreate,
+    admin_id: str = Depends(require_admin),
+):
+    currency = (data.currency or "").strip().upper() or None
+
+    with engine.begin() as conn:
+        if not conn.execute(text("SELECT id FROM users WHERE id = :id"), {"id": owner_id}).fetchone():
+            raise HTTPException(404, "Propietario no encontrado.")
+
+        params = {"owner_id": owner_id}
+        currency_clause = ""
+        if currency:
+            if currency not in {"ARS", "USD"}:
+                raise HTTPException(422, "Moneda inválida.")
+            params["currency"] = currency
+            currency_clause = " AND currency = :currency"
+
+        groups = conn.execute(text(f"""
+            SELECT currency, COUNT(*) AS transaction_count, COALESCE(SUM(amount), 0) AS amount
+            FROM transactions
+            WHERE owner_id = :owner_id
+              AND status = 'DISPONIBLE'
+              {currency_clause}
+            GROUP BY currency
+            FOR UPDATE
+        """), params).mappings().all()
+
+        if not groups:
+            raise HTTPException(409, "No hay fondos disponibles para liquidar.")
+
+        conn.execute(text(f"""
+            UPDATE transactions
+            SET status = 'ENTREGADO', updated_at = NOW()
+            WHERE owner_id = :owner_id
+              AND status = 'DISPONIBLE'
+              {currency_clause}
+        """), params)
+
+        payouts = []
+        for group in groups:
+            payout_id = str(uuid.uuid4())
+            conn.execute(text("""
+                INSERT INTO admin_payouts
+                    (id, owner_id, currency, amount, transaction_count, admin_id, created_at)
+                VALUES
+                    (:id, :owner_id, :currency, :amount, :transaction_count, :admin_id, NOW())
+            """), {
+                "id": payout_id,
+                "owner_id": owner_id,
+                "currency": group["currency"],
+                "amount": group["amount"],
+                "transaction_count": group["transaction_count"],
+                "admin_id": admin_id,
+            })
+            payouts.append({
+                "id": payout_id,
+                "currency": group["currency"],
+                "amount": float(group["amount"] or 0),
+                "transaction_count": int(group["transaction_count"] or 0),
+            })
+
+    return {"message": "Liquidación marcada como entregada.", "payouts": payouts}
