@@ -28,3 +28,17 @@ CREATE TABLE IF NOT EXISTS admin_moderation_events (
     INDEX idx_moderation_admin (admin_id),
     INDEX idx_moderation_created_at (created_at)
 );
+
+
+CREATE TABLE IF NOT EXISTS admin_payouts (
+    id CHAR(36) NOT NULL PRIMARY KEY,
+    owner_id CHAR(36) NOT NULL,
+    currency VARCHAR(10) NOT NULL,
+    amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    transaction_count INT NOT NULL DEFAULT 0,
+    admin_id CHAR(36) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_admin_payouts_owner (owner_id),
+    INDEX idx_admin_payouts_admin (admin_id),
+    INDEX idx_admin_payouts_created_at (created_at)
+);
