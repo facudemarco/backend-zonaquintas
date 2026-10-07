@@ -13,6 +13,7 @@ origins = [
     "https://zonaquintas.com",
     "https://zonaquintas-website.vercel.app",
     "https://www.zonaquintas.com",
+    "https://zonaquintas-admin-crm.vercel.app",
 ]
 
 app.add_middleware( 
