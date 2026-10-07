@@ -124,6 +124,13 @@ async def admin_dashboard(_: str = Depends(require_admin)):
             ORDER BY b.created_at DESC LIMIT 8
         """)).mappings().all()
 
+        pending_verifications = conn.execute(text("""
+            SELECT COUNT(*)
+            FROM quintas q
+            LEFT JOIN quinta_verifications v ON v.quinta_id = q.id
+            WHERE COALESCE(v.status, 'PENDIENTE') IN ('PENDIENTE', 'EN_REVISION')
+        """)).scalar() or 0
+
     return {
         "users": {
             "total": int(users_total),
@@ -148,6 +155,7 @@ async def admin_dashboard(_: str = Depends(require_admin)):
             }
         },
         "recent_bookings": [dict(row) for row in recent_bookings],
+        "pending_verifications": int(pending_verifications),
         "platform_revenue": None,
         "platform_revenue_note": "No se calcula hasta definir la comisión de ZonaQuintas.",
     }
