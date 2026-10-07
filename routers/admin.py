@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from Database.getConnection import engine
@@ -292,3 +293,197 @@ async def admin_transactions(
             LIMIT :limit OFFSET :offset
         """), params).mappings().all()
     return [dict(row) for row in rows]
+
+
+class AdminStatusUpdate(BaseModel):
+    status: str
+
+
+@router.get("/bookings/{booking_id}")
+async def admin_booking_detail(booking_id: str, _: str = Depends(require_admin)):
+    with engine.connect() as conn:
+        booking = conn.execute(text("""
+            SELECT b.*,
+                   COALESCE(q.title, b.quinta_title) AS resolved_quinta_title,
+                   q.city AS quinta_city,
+                   guest.name AS guest_name, guest.email AS guest_email, guest.phone AS guest_phone,
+                   owner.name AS owner_name, owner.email AS owner_email, owner.phone AS owner_phone
+            FROM bookings b
+            LEFT JOIN quintas q ON q.id = b.quinta_id
+            LEFT JOIN users guest ON guest.id = b.guest_id
+            LEFT JOIN users owner ON owner.id = b.owner_id
+            WHERE b.id = :id
+        """), {"id": booking_id}).mappings().first()
+        if not booking:
+            raise HTTPException(404, "Reserva no encontrada.")
+
+        payments = [dict(row) for row in conn.execute(text("""
+            SELECT * FROM booking_payments
+            WHERE booking_id = :id
+            ORDER BY created_at DESC
+        """), {"id": booking_id}).mappings()]
+
+        transactions = [dict(row) for row in conn.execute(text("""
+            SELECT * FROM transactions
+            WHERE booking_id = :id
+            ORDER BY created_at DESC
+        """), {"id": booking_id}).mappings()]
+
+    return {
+        "booking": dict(booking),
+        "payments": payments,
+        "transactions": transactions,
+    }
+
+
+@router.patch("/bookings/{booking_id}/status")
+async def admin_booking_status(
+    booking_id: str,
+    data: AdminStatusUpdate,
+    _: str = Depends(require_admin),
+):
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("UPDATE bookings SET status = :status, updated_at = NOW() WHERE id = :id"),
+            {"status": data.status, "id": booking_id},
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "Reserva no encontrada.")
+    return {"message": "Estado de reserva actualizado.", "status": data.status}
+
+
+@router.get("/quintas/{quinta_id}")
+async def admin_quinta_detail(quinta_id: str, _: str = Depends(require_admin)):
+    with engine.connect() as conn:
+        quinta = conn.execute(text("""
+            SELECT q.*,
+                   u.name AS owner_name, u.email AS owner_email, u.phone AS owner_phone,
+                   u.average_opinions AS owner_average_opinions
+            FROM quintas q
+            LEFT JOIN users u ON u.id = q.owner_id
+            WHERE q.id = :id
+        """), {"id": quinta_id}).mappings().first()
+        if not quinta:
+            raise HTTPException(404, "Quinta no encontrada.")
+
+        main_image = conn.execute(
+            text("SELECT url FROM quintas_main_images WHERE quinta_id = :id"),
+            {"id": quinta_id},
+        ).scalar()
+
+        images = conn.execute(
+            text("SELECT url FROM images_quintas WHERE quinta_id = :id"),
+            {"id": quinta_id},
+        ).scalars().all()
+
+        bookings = [dict(row) for row in conn.execute(text("""
+            SELECT b.id, b.guest_id, b.check_in, b.check_out, b.amount,
+                   b.currency_price, b.status, b.created_at,
+                   u.name AS guest_name, u.email AS guest_email
+            FROM bookings b
+            LEFT JOIN users u ON u.id = b.guest_id
+            WHERE b.quinta_id = :id
+            ORDER BY b.created_at DESC
+            LIMIT 30
+        """), {"id": quinta_id}).mappings()]
+
+        reviews = [dict(row) for row in conn.execute(text("""
+            SELECT r.*, b.guest_id, u.name AS guest_name
+            FROM reviews r
+            JOIN bookings b ON b.id = r.booking_id
+            LEFT JOIN users u ON u.id = b.guest_id
+            WHERE b.quinta_id = :id
+            ORDER BY r.created_at DESC
+        """), {"id": quinta_id}).mappings()]
+
+    return {
+        "quinta": dict(quinta),
+        "main_image": main_image,
+        "images": list(images),
+        "bookings": bookings,
+        "reviews": reviews,
+    }
+
+
+@router.patch("/quintas/{quinta_id}/status")
+async def admin_quinta_status(
+    quinta_id: str,
+    data: AdminStatusUpdate,
+    _: str = Depends(require_admin),
+):
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("UPDATE quintas SET status = :status WHERE id = :id"),
+            {"status": data.status, "id": quinta_id},
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "Quinta no encontrada.")
+    return {"message": "Estado de quinta actualizado.", "status": data.status}
+
+
+@router.get("/users/{user_id}")
+async def admin_user_detail(user_id: str, _: str = Depends(require_admin)):
+    with engine.connect() as conn:
+        user = conn.execute(text("""
+            SELECT id, email, name, phone, date_of_birth, address, description, role,
+                   owner_time, owner_location, average_opinions, created_at,
+                   membership_status, membership_expires_at
+            FROM users
+            WHERE id = :id
+        """), {"id": user_id}).mappings().first()
+        if not user:
+            raise HTTPException(404, "Usuario no encontrado.")
+
+        pictures = [dict(row) for row in conn.execute(
+            text("SELECT id, url FROM users_picture WHERE user_id = :id"),
+            {"id": user_id},
+        ).mappings()]
+
+        quintas = [dict(row) for row in conn.execute(text("""
+            SELECT id, title, city, status, price, currency_price, created_at
+            FROM quintas WHERE owner_id = :id
+            ORDER BY created_at DESC
+        """), {"id": user_id}).mappings()]
+
+        guest_bookings = [dict(row) for row in conn.execute(text("""
+            SELECT b.id, b.quinta_id, b.check_in, b.check_out, b.amount,
+                   b.currency_price, b.status, b.created_at,
+                   COALESCE(q.title, b.quinta_title) AS quinta_title
+            FROM bookings b
+            LEFT JOIN quintas q ON q.id = b.quinta_id
+            WHERE b.guest_id = :id
+            ORDER BY b.created_at DESC
+            LIMIT 30
+        """), {"id": user_id}).mappings()]
+
+        owner_bookings = [dict(row) for row in conn.execute(text("""
+            SELECT b.id, b.quinta_id, b.check_in, b.check_out, b.amount,
+                   b.currency_price, b.status, b.created_at,
+                   COALESCE(q.title, b.quinta_title) AS quinta_title,
+                   guest.name AS guest_name, guest.email AS guest_email
+            FROM bookings b
+            LEFT JOIN quintas q ON q.id = b.quinta_id
+            LEFT JOIN users guest ON guest.id = b.guest_id
+            WHERE b.owner_id = :id
+            ORDER BY b.created_at DESC
+            LIMIT 30
+        """), {"id": user_id}).mappings()]
+
+        reviews = [dict(row) for row in conn.execute(text("""
+            SELECT r.*, b.quinta_id, q.title AS quinta_title
+            FROM reviews r
+            JOIN bookings b ON b.id = r.booking_id
+            LEFT JOIN quintas q ON q.id = b.quinta_id
+            WHERE b.guest_id = :id OR b.owner_id = :id
+            ORDER BY r.created_at DESC
+            LIMIT 30
+        """), {"id": user_id}).mappings()]
+
+    return {
+        "user": dict(user),
+        "pictures": pictures,
+        "quintas": quintas,
+        "guest_bookings": guest_bookings,
+        "owner_bookings": owner_bookings,
+        "reviews": reviews,
+    }
