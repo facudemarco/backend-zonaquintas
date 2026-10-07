@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from Database.getConnection import engine
 from utils.security import get_current_user
@@ -124,12 +124,17 @@ async def admin_dashboard(_: str = Depends(require_admin)):
             ORDER BY b.created_at DESC LIMIT 8
         """)).mappings().all()
 
-        pending_verifications = conn.execute(text("""
-            SELECT COUNT(*)
-            FROM quintas q
-            LEFT JOIN quinta_verifications v ON v.quinta_id = q.id
-            WHERE COALESCE(v.status, 'PENDIENTE') IN ('PENDIENTE', 'EN_REVISION')
-        """)).scalar() or 0
+        # The CRM schema is installed separately from the marketplace schema.
+        # Without verification records, every quinta is implicitly pending.
+        if inspect(conn).has_table("quinta_verifications"):
+            pending_verifications = conn.execute(text("""
+                SELECT COUNT(*)
+                FROM quintas q
+                LEFT JOIN quinta_verifications v ON v.quinta_id = q.id
+                WHERE COALESCE(v.status, 'PENDIENTE') IN ('PENDIENTE', 'EN_REVISION')
+            """)).scalar() or 0
+        else:
+            pending_verifications = quintas_total
 
     return {
         "users": {
