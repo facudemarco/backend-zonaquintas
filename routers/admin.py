@@ -1,6 +1,7 @@
 """Administrative endpoints for ZonaQuintas internal backoffice."""
 from decimal import Decimal
 from typing import Optional
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -487,3 +488,163 @@ async def admin_user_detail(user_id: str, _: str = Depends(require_admin)):
         "owner_bookings": owner_bookings,
         "reviews": reviews,
     }
+
+
+class QuintaVerificationUpdate(BaseModel):
+    status: str
+    rejection_reason: Optional[str] = None
+    admin_notes: Optional[str] = None
+
+
+@router.get("/verifications")
+async def admin_verifications(
+    status: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: str = Depends(require_admin),
+):
+    clauses = []
+    params = {"limit": limit, "offset": offset}
+    if status:
+        clauses.append("LOWER(COALESCE(v.status, 'PENDIENTE')) = LOWER(:status)")
+        params["status"] = status
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"""
+            SELECT q.id AS quinta_id, q.title, q.city, q.address, q.status AS quinta_status,
+                   q.owner_id, u.name AS owner_name, u.email AS owner_email,
+                   COALESCE(v.status, 'PENDIENTE') AS verification_status,
+                   v.rejection_reason, v.admin_notes, v.verified_by, v.verified_at, v.updated_at
+            FROM quintas q
+            LEFT JOIN users u ON u.id = q.owner_id
+            LEFT JOIN quinta_verifications v ON v.quinta_id = q.id
+            {where_sql}
+            ORDER BY
+              CASE COALESCE(v.status, 'PENDIENTE')
+                WHEN 'PENDIENTE' THEN 0
+                WHEN 'EN_REVISION' THEN 1
+                WHEN 'RECHAZADA' THEN 2
+                WHEN 'VERIFICADA' THEN 3
+                ELSE 4
+              END,
+              q.created_at DESC
+            LIMIT :limit OFFSET :offset
+        """), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+@router.get("/verifications/{quinta_id}")
+async def admin_verification_detail(quinta_id: str, _: str = Depends(require_admin)):
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT q.*, u.name AS owner_name, u.email AS owner_email, u.phone AS owner_phone,
+                   COALESCE(v.status, 'PENDIENTE') AS verification_status,
+                   v.rejection_reason, v.admin_notes, v.verified_by, v.verified_at, v.updated_at
+            FROM quintas q
+            LEFT JOIN users u ON u.id = q.owner_id
+            LEFT JOIN quinta_verifications v ON v.quinta_id = q.id
+            WHERE q.id = :id
+        """), {"id": quinta_id}).mappings().first()
+        if not row:
+            raise HTTPException(404, "Quinta no encontrada.")
+
+        events = [dict(event) for event in conn.execute(text("""
+            SELECT e.*, u.name AS admin_name, u.email AS admin_email
+            FROM admin_moderation_events e
+            LEFT JOIN users u ON u.id = e.admin_id
+            WHERE e.entity_type = 'quinta' AND e.entity_id = :id
+            ORDER BY e.created_at DESC
+        """), {"id": quinta_id}).mappings()]
+
+    return {"quinta": dict(row), "moderation_events": events}
+
+
+@router.patch("/verifications/{quinta_id}")
+async def admin_update_verification(
+    quinta_id: str,
+    data: QuintaVerificationUpdate,
+    admin_id: str = Depends(require_admin),
+):
+    allowed = {"PENDIENTE", "EN_REVISION", "VERIFICADA", "RECHAZADA"}
+    new_status = data.status.strip().upper()
+    if new_status not in allowed:
+        raise HTTPException(422, "Estado de verificación inválido.")
+    if new_status == "RECHAZADA" and not (data.rejection_reason or "").strip():
+        raise HTTPException(422, "El motivo de rechazo es obligatorio.")
+
+    with engine.begin() as conn:
+        if not conn.execute(text("SELECT id FROM quintas WHERE id = :id"), {"id": quinta_id}).fetchone():
+            raise HTTPException(404, "Quinta no encontrada.")
+
+        previous = conn.execute(
+            text("SELECT status FROM quinta_verifications WHERE quinta_id = :id"),
+            {"id": quinta_id},
+        ).scalar() or "PENDIENTE"
+
+        verified_at_sql = "NOW()" if new_status == "VERIFICADA" else "NULL"
+        conn.execute(text(f"""
+            INSERT INTO quinta_verifications
+                (quinta_id, status, rejection_reason, admin_notes, verified_by, verified_at, created_at, updated_at)
+            VALUES
+                (:quinta_id, :status, :rejection_reason, :admin_notes, :verified_by, {verified_at_sql}, NOW(), NOW())
+            ON DUPLICATE KEY UPDATE
+                status = VALUES(status),
+                rejection_reason = VALUES(rejection_reason),
+                admin_notes = VALUES(admin_notes),
+                verified_by = VALUES(verified_by),
+                verified_at = {verified_at_sql},
+                updated_at = NOW()
+        """), {
+            "quinta_id": quinta_id,
+            "status": new_status,
+            "rejection_reason": data.rejection_reason,
+            "admin_notes": data.admin_notes,
+            "verified_by": admin_id,
+        })
+
+        conn.execute(text("""
+            INSERT INTO admin_moderation_events
+                (id, entity_type, entity_id, action, previous_status, new_status, reason, admin_id, created_at)
+            VALUES
+                (:id, 'quinta', :entity_id, 'VERIFICATION_STATUS_CHANGED',
+                 :previous_status, :new_status, :reason, :admin_id, NOW())
+        """), {
+            "id": str(uuid.uuid4()),
+            "entity_id": quinta_id,
+            "previous_status": previous,
+            "new_status": new_status,
+            "reason": data.rejection_reason or data.admin_notes,
+            "admin_id": admin_id,
+        })
+
+    return {"message": "Verificación actualizada.", "status": new_status}
+
+
+@router.get("/moderation-events")
+async def admin_moderation_events(
+    entity_type: Optional[str] = Query(default=None),
+    entity_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=300),
+    _: str = Depends(require_admin),
+):
+    clauses = []
+    params = {"limit": limit}
+    if entity_type:
+        clauses.append("e.entity_type = :entity_type")
+        params["entity_type"] = entity_type
+    if entity_id:
+        clauses.append("e.entity_id = :entity_id")
+        params["entity_id"] = entity_id
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"""
+            SELECT e.*, u.name AS admin_name, u.email AS admin_email
+            FROM admin_moderation_events e
+            LEFT JOIN users u ON u.id = e.admin_id
+            {where_sql}
+            ORDER BY e.created_at DESC
+            LIMIT :limit
+        """), params).mappings().all()
+    return [dict(row) for row in rows]
