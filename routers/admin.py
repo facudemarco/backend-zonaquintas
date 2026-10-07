@@ -803,3 +803,269 @@ async def admin_create_payout(
             })
 
     return {"message": "Liquidación marcada como entregada.", "payouts": payouts}
+
+
+class AdminPaymentStatusUpdate(BaseModel):
+    status: str
+
+
+@router.get("/payments")
+async def admin_payments(
+    status: Optional[str] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=300),
+    offset: int = Query(default=0, ge=0),
+    _: str = Depends(require_admin),
+):
+    clauses = []
+    params = {"limit": limit, "offset": offset}
+
+    if status:
+        clauses.append("LOWER(COALESCE(bp.status, '')) = LOWER(:status)")
+        params["status"] = status
+
+    if search:
+        clauses.append("""(
+            bp.id LIKE :search
+            OR bp.booking_id LIKE :search
+            OR COALESCE(bp.rebill_transaction_id, '') LIKE :search
+            OR COALESCE(q.title, b.quinta_title, '') LIKE :search
+            OR COALESCE(guest.email, '') LIKE :search
+            OR COALESCE(owner.email, '') LIKE :search
+        )""")
+        params["search"] = f"%{search}%"
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"""
+            SELECT
+                bp.*,
+                COALESCE(q.title, b.quinta_title) AS quinta_title,
+                b.quinta_id,
+                b.guest_id,
+                b.owner_id,
+                guest.name AS guest_name,
+                guest.email AS guest_email,
+                owner.name AS owner_name,
+                owner.email AS owner_email,
+                b.check_in,
+                b.check_out,
+                b.status AS booking_status
+            FROM booking_payments bp
+            JOIN bookings b ON b.id = bp.booking_id
+            LEFT JOIN quintas q ON q.id = b.quinta_id
+            LEFT JOIN users guest ON guest.id = b.guest_id
+            LEFT JOIN users owner ON owner.id = b.owner_id
+            {where_sql}
+            ORDER BY bp.created_at DESC
+            LIMIT :limit OFFSET :offset
+        """), params).mappings().all()
+
+    return [dict(row) for row in rows]
+
+
+@router.get("/payments/{payment_id}")
+async def admin_payment_detail(payment_id: str, _: str = Depends(require_admin)):
+    with engine.connect() as conn:
+        payment = conn.execute(text("""
+            SELECT
+                bp.*,
+                COALESCE(q.title, b.quinta_title) AS quinta_title,
+                b.quinta_id,
+                b.guest_id,
+                b.owner_id,
+                b.check_in,
+                b.check_out,
+                b.status AS booking_status,
+                b.amount AS booking_amount,
+                b.currency_price AS booking_currency,
+                guest.name AS guest_name,
+                guest.email AS guest_email,
+                owner.name AS owner_name,
+                owner.email AS owner_email
+            FROM booking_payments bp
+            JOIN bookings b ON b.id = bp.booking_id
+            LEFT JOIN quintas q ON q.id = b.quinta_id
+            LEFT JOIN users guest ON guest.id = b.guest_id
+            LEFT JOIN users owner ON owner.id = b.owner_id
+            WHERE bp.id = :id
+        """), {"id": payment_id}).mappings().first()
+
+        if not payment:
+            raise HTTPException(404, "Pago no encontrado.")
+
+        wallet_transactions = [dict(row) for row in conn.execute(text("""
+            SELECT *
+            FROM transactions
+            WHERE booking_id = :booking_id
+              AND owner_id = :owner_id
+              AND client_id = :guest_id
+            ORDER BY created_at DESC
+        """), {
+            "booking_id": payment["booking_id"],
+            "owner_id": payment["owner_id"],
+            "guest_id": payment["guest_id"],
+        }).mappings()]
+
+    return {
+        "payment": dict(payment),
+        "wallet_transactions": wallet_transactions,
+    }
+
+
+@router.patch("/payments/{payment_id}/status")
+async def admin_payment_status(
+    payment_id: str,
+    data: AdminPaymentStatusUpdate,
+    _: str = Depends(require_admin),
+):
+    status = data.status.strip().upper()
+    if not status:
+        raise HTTPException(422, "Estado inválido.")
+
+    paid_statuses = {"PAID", "APPROVED", "APROBADO", "PAGADO", "COMPLETADO", "COMPLETED", "FINISHED"}
+
+    with engine.begin() as conn:
+        existing = conn.execute(text("""
+            SELECT bp.id, bp.booking_id, bp.amount, bp.currency, bp.payment_type,
+                   b.owner_id, b.guest_id, b.quinta_id
+            FROM booking_payments bp
+            JOIN bookings b ON b.id = bp.booking_id
+            WHERE bp.id = :id
+            FOR UPDATE
+        """), {"id": payment_id}).mappings().first()
+
+        if not existing:
+            raise HTTPException(404, "Pago no encontrado.")
+
+        paid_at_sql = "COALESCE(paid_at, NOW())" if status in paid_statuses else "paid_at"
+        conn.execute(text(f"""
+            UPDATE booking_payments
+            SET status = :status,
+                paid_at = {paid_at_sql},
+                updated_at = NOW()
+            WHERE id = :id
+        """), {"status": status, "id": payment_id})
+
+        if status in paid_statuses:
+            description = f"Pago reserva {existing['booking_id']} ({existing['payment_type'] or 'booking'})"
+            duplicate = conn.execute(text("""
+                SELECT id FROM transactions
+                WHERE booking_id = :booking_id
+                  AND owner_id = :owner_id
+                  AND client_id = :client_id
+                  AND amount = :amount
+                  AND currency = :currency
+                  AND description = :description
+            """), {
+                "booking_id": existing["booking_id"],
+                "owner_id": existing["owner_id"],
+                "client_id": existing["guest_id"],
+                "amount": existing["amount"] or 0,
+                "currency": existing["currency"] or "ARS",
+                "description": description,
+            }).fetchone()
+
+            if not duplicate:
+                conn.execute(text("""
+                    INSERT INTO transactions (
+                        id, owner_id, client_id, quinta_id, booking_id, amount,
+                        currency, status, description, created_at, updated_at
+                    ) VALUES (
+                        :id, :owner_id, :client_id, :quinta_id, :booking_id, :amount,
+                        :currency, 'RETENIDO', :description, NOW(), NOW()
+                    )
+                """), {
+                    "id": str(uuid.uuid4()),
+                    "owner_id": existing["owner_id"],
+                    "client_id": existing["guest_id"],
+                    "quinta_id": existing["quinta_id"],
+                    "booking_id": existing["booking_id"],
+                    "amount": existing["amount"] or 0,
+                    "currency": existing["currency"] or "ARS",
+                    "description": description,
+                })
+
+    return {"message": "Estado del pago actualizado.", "status": status}
+
+
+@router.get("/finance")
+async def admin_finance(_: str = Depends(require_admin)):
+    paid_statuses = ("PAID", "APPROVED", "APROBADO", "PAGADO", "COMPLETADO", "COMPLETED", "FINISHED")
+
+    with engine.connect() as conn:
+        payment_summary = conn.execute(text("""
+            SELECT
+                COALESCE(currency, 'ARS') AS currency,
+                COUNT(*) AS payment_count,
+                COALESCE(SUM(amount), 0) AS total_payment_amount,
+                COALESCE(SUM(CASE
+                    WHEN UPPER(COALESCE(status, '')) IN ('PAID','APPROVED','APROBADO','PAGADO','COMPLETADO','COMPLETED','FINISHED')
+                    THEN amount ELSE 0 END), 0) AS paid_amount,
+                COALESCE(SUM(CASE
+                    WHEN UPPER(COALESCE(status, '')) IN ('PENDING','PENDIENTE')
+                    THEN amount ELSE 0 END), 0) AS pending_amount
+            FROM booking_payments
+            GROUP BY COALESCE(currency, 'ARS')
+            ORDER BY currency
+        """)).mappings().all()
+
+        transaction_summary = conn.execute(text("""
+            SELECT
+                currency,
+                COALESCE(SUM(CASE WHEN status = 'RETENIDO' THEN amount ELSE 0 END), 0) AS retained_amount,
+                COALESCE(SUM(CASE WHEN status = 'DISPONIBLE' THEN amount ELSE 0 END), 0) AS available_amount,
+                COALESCE(SUM(CASE WHEN status = 'ENTREGADO' THEN amount ELSE 0 END), 0) AS delivered_amount,
+                COALESCE(SUM(CASE WHEN status = 'CANCELADO' THEN amount ELSE 0 END), 0) AS cancelled_amount,
+                COALESCE(SUM(CASE WHEN status = 'REEMBOLSADO' THEN amount ELSE 0 END), 0) AS refunded_amount,
+                COUNT(*) AS transaction_count
+            FROM transactions
+            GROUP BY currency
+            ORDER BY currency
+        """)).mappings().all()
+
+        payout_summary = conn.execute(text("""
+            SELECT
+                currency,
+                COUNT(*) AS payout_count,
+                COALESCE(SUM(amount), 0) AS payout_amount
+            FROM admin_payouts
+            GROUP BY currency
+            ORDER BY currency
+        """)).mappings().all()
+
+        booking_summary = conn.execute(text("""
+            SELECT
+                COALESCE(currency_price, 'ARS') AS currency,
+                COUNT(*) AS booking_count,
+                COALESCE(SUM(amount), 0) AS booking_gmv
+            FROM bookings
+            GROUP BY COALESCE(currency_price, 'ARS')
+            ORDER BY currency
+        """)).mappings().all()
+
+        payment_statuses = conn.execute(text("""
+            SELECT COALESCE(status, 'SIN_ESTADO') AS status,
+                   COUNT(*) AS total,
+                   COALESCE(SUM(amount), 0) AS amount
+            FROM booking_payments
+            GROUP BY COALESCE(status, 'SIN_ESTADO')
+            ORDER BY total DESC
+        """)).mappings().all()
+
+    return {
+        "payments": [dict(row) for row in payment_summary],
+        "transactions": [dict(row) for row in transaction_summary],
+        "payouts": [dict(row) for row in payout_summary],
+        "bookings": [dict(row) for row in booking_summary],
+        "payment_statuses": [dict(row) for row in payment_statuses],
+        "platform_revenue": None,
+        "processor_fees": None,
+        "net_revenue": None,
+        "notes": {
+            "platform_revenue": "No se calcula hasta definir la comisión de ZonaQuintas.",
+            "processor_fees": "El backend actual no persiste el fee cobrado por Rebill.",
+            "gmv_definition": "El GMV mostrado proviene del monto de las reservas; los cobros efectivamente pagados se muestran por separado.",
+        },
+    }
