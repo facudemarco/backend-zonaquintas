@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import inspect, text
 
 from Database.getConnection import engine
+from services.review_eligibility import utc_now
 from utils.security import get_current_user
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -61,12 +62,15 @@ async def owner_overview(owner_id: str, _: str = Depends(require_admin)):
             WHERE b.owner_id = :id ORDER BY p.created_at DESC
         """), {"id": owner_id}).mappings()]
         reviews = [dict(row) for row in conn.execute(text("""
-            SELECT r.*, q.title AS quinta_title, u.name AS guest_name
+            SELECT r.*, b.quinta_id, q.title AS quinta_title, u.name AS guest_name
             FROM reviews r JOIN bookings b ON b.id=r.booking_id
             LEFT JOIN quintas q ON q.id=b.quinta_id
             LEFT JOIN users u ON u.id=b.guest_id
-            WHERE b.owner_id=:id ORDER BY r.created_at DESC
-        """), {"id": owner_id}).mappings()]
+            WHERE r.recipient_id=:id AND r.direction='guest_to_owner'
+              AND r.moderation_status='visible' AND r.reveal_at <= :now
+            ORDER BY r.created_at DESC
+        """), {"id": owner_id, "now": utc_now()}).mappings()]
+        profile["average_opinions"] = (sum(float(row["stars"]) for row in reviews) / len(reviews)) if reviews else None
         transactions = [dict(row) for row in conn.execute(text("""
             SELECT t.id, t.booking_id, t.amount, t.currency, t.status,
                    t.created_at AS date, t.description, t.transfer_date_estimate,

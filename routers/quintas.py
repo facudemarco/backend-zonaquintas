@@ -12,6 +12,7 @@ import json
 from models.quintas import QuintaCreate, QuintaUpdate, QuintaStatusUpdate
 from pydantic import BaseModel
 from services.availability import validate_rental_period, lock_quinta, blocking_bookings
+from services.review_eligibility import utc_now
 from utils.security import get_current_user
 
 router = APIRouter()
@@ -207,6 +208,17 @@ async def get_quintas():
             if not rows:
                 return []
 
+            review_rows = conn.execute(text("""
+                SELECT b.quinta_id, COUNT(*) AS review_count, AVG(r.stars) AS review_average
+                FROM reviews r JOIN bookings b ON b.id = r.booking_id
+                JOIN quintas q ON q.id = b.quinta_id
+                WHERE r.direction = 'guest_to_owner' AND r.moderation_status = 'visible'
+                  AND r.reveal_at <= :now AND LOWER(q.status) = 'active'
+                GROUP BY b.quinta_id
+            """), {"now": utc_now()}).mappings().all()
+            review_summary = {row["quinta_id"]: {"count": row["review_count"],
+                                                  "average": float(row["review_average"])} for row in review_rows}
+
             quintas = []
             for quinta in rows:
                 hid = quinta["id"]
@@ -219,6 +231,7 @@ async def get_quintas():
                 data = dict(quinta)
                 data["main_image"] = main[0] if main else None
                 data["images"] = list(imgs)
+                data["review_summary"] = review_summary.get(hid, {"count": 0, "average": None})
                 quintas.append(data)
             return quintas
     except Exception as e:

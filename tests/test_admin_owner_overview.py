@@ -51,8 +51,8 @@ def overview(monkeypatch):
             conn.execute(text("INSERT INTO transactions (id, owner_id, quinta_id, status, currency, amount) VALUES (:id, :owner, :owner, :status, :currency, :amount)"),
                          {"id": str(index), "owner": owner, "status": status, "currency": currency, "amount": amount})
     with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE reviews (id TEXT PRIMARY KEY, booking_id TEXT, stars INTEGER, review_text TEXT, created_at TEXT)"))
-        conn.execute(text("INSERT INTO reviews VALUES ('own-review', '3', 5, 'Great', '2026-01-01'), ('foreign-review', 'foreign', 2, 'Other', '2026-01-01')"))
+        conn.execute(text("CREATE TABLE reviews (id TEXT PRIMARY KEY, booking_id TEXT, stars INTEGER, review_text TEXT, created_at TEXT, recipient_id TEXT, direction TEXT, moderation_status TEXT, reveal_at TEXT)"))
+        conn.execute(text("INSERT INTO reviews VALUES ('own-review', '3', 5, 'Great', '2026-01-01', 'owner', 'guest_to_owner', 'visible', '2026-01-01'), ('foreign-review', 'foreign', 2, 'Other', '2026-01-01', 'other', 'guest_to_owner', 'visible', '2026-01-01')"))
     app = FastAPI()
     app.include_router(api.router)
     with TestClient(app) as client:
