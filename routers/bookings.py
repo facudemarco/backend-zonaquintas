@@ -12,6 +12,7 @@ from models.bookings import (
     BookingStatusUpdate,
 )
 from services.availability import lock_quinta, ensure_available
+from services.review_eligibility import review_eligibility, review_window, utc_now
 from utils.security import get_current_user
 
 router = APIRouter()
@@ -215,16 +216,39 @@ async def get_owner_bookings(owner_id: str, user_id: str = Depends(get_current_u
         with engine.begin() as conn:
             rows = conn.execute(
                 text("""
-                    SELECT b.*, q.title AS quinta_title, u.email AS guest_email
+                    SELECT b.*, q.title AS quinta_title, u.email AS guest_email,
+                           u.name AS guest_name,
+                           (SELECT MIN(p.url) FROM users_picture p WHERE p.user_id=b.guest_id) AS guest_avatar_url,
+                           (SELECT COUNT(*) FROM reviews r WHERE r.recipient_id=b.guest_id
+                             AND r.direction='owner_to_guest' AND r.moderation_status='visible'
+                             AND r.reveal_at <= :now) AS guest_review_count,
+                           (SELECT AVG(r.stars) FROM reviews r WHERE r.recipient_id=b.guest_id
+                             AND r.direction='owner_to_guest' AND r.moderation_status='visible'
+                             AND r.reveal_at <= :now) AS guest_review_average
                     FROM bookings b
                     LEFT JOIN quintas q ON b.quinta_id = q.id
                     LEFT JOIN users u ON b.guest_id = u.id
                     WHERE b.owner_id = :owner_id
                     ORDER BY b.created_at DESC
                 """),
-                {"owner_id": owner_id},
+                {"owner_id": owner_id, "now": utc_now()},
             ).mappings().all()
-            return [dict(row) for row in rows]
+            written = {row["booking_id"] for row in conn.execute(text("""
+                SELECT booking_id FROM reviews WHERE author_id = :owner_id
+            """), {"owner_id": owner_id}).mappings()}
+            now = utc_now()
+            result = []
+            for row in rows:
+                booking = dict(row)
+                reason = review_eligibility(booking, owner_id, booking["id"] in written, now)
+                window = review_window(booking)
+                booking["can_review"] = reason is None
+                booking["has_review"] = booking["id"] in written
+                booking["review_reason"] = reason
+                booking["review_opens_at"] = window[0] if window else None
+                booking["review_deadline_at"] = window[1] if window else None
+                result.append(booking)
+            return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

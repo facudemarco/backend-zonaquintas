@@ -23,7 +23,6 @@ class UserRegister(BaseModel):
     
     # 1:N Relation arrays
     languages: Optional[List[str]] = None
-    opinions: Optional[List[str]] = None
     pictures: Optional[List[str]] = None
 
 class UserUpdate(BaseModel):
@@ -38,6 +37,7 @@ class UserUpdate(BaseModel):
     owner_time: Optional[str] = None
     owner_location: Optional[str] = None
     average_opinions: Optional[float] = None
+    review_reminders_enabled: Optional[bool] = None
     
     #Rebill subscription
     rebill_customer_id: Optional[str] = None
@@ -48,5 +48,4 @@ class UserUpdate(BaseModel):
     
     # 1:N Relation arrays
     languages: Optional[List[str]] = None
-    opinions: Optional[List[str]] = None
     pictures: Optional[List[str]] = None

@@ -84,14 +84,8 @@ class LoginData(BaseModel):
 async def register_user(data: UserRegister):
     try:
         user_id = str(uuid.uuid4())
-        hashed_pw = data.password
-        
-        # User Backup Request
-        print(f"==================================================")
-        print(f"🚨 NEW USER REGISTERED: {data.email}")
-        print(f"🔑 PLAINTEXT PASSWORD FOR BACKUP [{user_id}]: {data.password.encode('utf-8')[:72].decode('utf-8', 'ignore')}")
-        print(f"==================================================")
-        
+        hashed_pw = pwd_context.hash(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'))
+
         with engine.begin() as conn:
             # Prevenir duplicados
             exist = conn.execute(text("SELECT id FROM users WHERE email = :email"), {"email": data.email}).fetchone()
@@ -111,11 +105,11 @@ async def register_user(data: UserRegister):
                     "dob": data.date_of_birth,
                     "addr": data.address,
                     "desc": data.description,
-                    "role": data.role,
+                    "role": "user",
                     "name": data.name,
                     "otime": data.owner_time,
                     "oloc": data.owner_location,
-                    "avg_op": data.average_opinions
+                    "avg_op": None
                 }
             )
             
@@ -127,13 +121,6 @@ async def register_user(data: UserRegister):
                         {"id": str(uuid.uuid4()), "u_id": user_id, "lang": lang}
                     )
             
-            if data.opinions:
-                for op in data.opinions:
-                    conn.execute(
-                        text("INSERT INTO users_opinions (id, user_id, opinions) VALUES (:id, :u_id, :op)"),
-                        {"id": str(uuid.uuid4()), "u_id": user_id, "op": op}
-                    )
-                    
             if data.pictures:
                 for pic in data.pictures:
                     conn.execute(
@@ -188,91 +175,43 @@ async def login(data: LoginData, response: Response):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/user/{user_id}", tags=["Auth & Users"])
-async def update_user(user_id: str, data: UserUpdate):
-    try:
-        with engine.begin() as conn:
-            # Chequeamos si actualiza contraseña independientemente
-            if data.password:
-                conn.execute(
-                    text("UPDATE users SET password_hash = :pw WHERE id = :id"),
-                    {"pw": data.password, "id": user_id}
-                )
-            
-            # Actualiza el resto de atributos (solo columnas que existen en la tabla users)
-            conn.execute(
-                text("""
-                    UPDATE users SET
-                        email = COALESCE(:email, email),
-                        phone = COALESCE(:phone, phone),
-                        date_of_birth = COALESCE(:dob, date_of_birth),
-                        address = COALESCE(:addr, address),
-                        description = COALESCE(:desc, description),
-                        name = COALESCE(:name, name),
-                        role = COALESCE(:role, role),
-                        owner_time = COALESCE(:otime, owner_time),
-                        owner_location = COALESCE(:oloc, owner_location),
-                        average_opinions = COALESCE(:avg_op, average_opinions)
-                    WHERE id = :id
-                """),
-                {
-                    "id": user_id,  
-                    "email": data.email,
-                    "phone": data.phone,
-                    "dob": data.date_of_birth,
-                    "addr": data.address,
-                    "desc": data.description,
-                    "name": data.name,
-                    "role": data.role,
-                    "otime": data.owner_time,
-                    "oloc": data.owner_location,
-                    "avg_op": data.average_opinions
-                }
-            )
-            
-            # Normalizar idiomas
-            if data.languages:
-                data.languages = [lang.lower() for lang in data.languages]
-            
-            # Normalizar opiniones
-            if data.opinions:
-                data.opinions = [op.lower() for op in data.opinions]
-            
-            # Normalizar fotos
-            if data.pictures:
-                data.pictures = [pic.lower() for pic in data.pictures]
-            
-            # Actualizar relaciones 1:N (Reemplazo completo si se envían)
-            if data.languages is not None:
-                conn.execute(text("DELETE FROM users_languages WHERE user_id = :id"), {"id": user_id})
-                for lang in data.languages:
-                    conn.execute(
-                        text("INSERT INTO users_languages (id, user_id, languages) VALUES (:id, :u_id, :lang)"),
-                        {"id": str(uuid.uuid4()), "u_id": user_id, "lang": lang}
-                    )
-            
-            if data.opinions is not None:
-                conn.execute(text("DELETE FROM users_opinions WHERE user_id = :id"), {"id": user_id})
-                for op in data.opinions:
-                    conn.execute(
-                        text("INSERT INTO users_opinions (id, user_id, opinions) VALUES (:id, :u_id, :op)"),
-                        {"id": str(uuid.uuid4()), "u_id": user_id, "op": op}
-                    )
-                    
-            if data.pictures is not None:
-                conn.execute(text("DELETE FROM users_picture WHERE user_id = :id"), {"id": user_id})
-                for pic in data.pictures:
-                    conn.execute(
-                        text("INSERT INTO users_picture (id, user_id, url) VALUES (:id, :u_id, :url)"),
-                        {"id": str(uuid.uuid4()), "u_id": user_id, "url": pic}
-                    )
+async def update_user(user_id: str, data: UserUpdate, current_user: str = Depends(get_current_user)):
+    # Only the account owner or an authenticated administrator may edit profile fields.
+    with engine.begin() as conn:
+        if current_user != user_id:
+            role = conn.execute(text("SELECT role FROM users WHERE id = :id"), {"id": current_user}).scalar()
+            if (role or "").lower() not in {"admin", "superadmin"}:
+                raise HTTPException(403, "No podés modificar otro usuario.")
+        exists = conn.execute(text("SELECT id FROM users WHERE id = :id"), {"id": user_id}).first()
+        if not exists:
+            raise HTTPException(404, "Usuario no encontrado.")
+        values = data.model_dump(exclude_unset=True)
+        allowed = {"email", "name", "phone", "date_of_birth", "address", "description", "owner_time", "owner_location", "review_reminders_enabled"}
+        updates = {key: value for key, value in values.items() if key in allowed}
+        if updates:
+            set_clause = ", ".join(f"{key} = :{key}" for key in updates)
+            conn.execute(text(f"UPDATE users SET {set_clause} WHERE id = :id"), {**updates, "id": user_id})
+            if updates.get("review_reminders_enabled") is False:
+                conn.execute(text("""
+                    UPDATE review_reminders SET status='cancelled', lease_until=NULL
+                    WHERE user_id=:id AND status IN ('pending', 'leased')
+                """), {"id": user_id})
+        if data.password:
+            hashed = pwd_context.hash(data.password.encode("utf-8")[:72].decode("utf-8", "ignore"))
+            conn.execute(text("UPDATE users SET password_hash = :pw WHERE id = :id"), {"pw": hashed, "id": user_id})
+        if data.languages is not None:
+            conn.execute(text("DELETE FROM users_languages WHERE user_id = :id"), {"id": user_id})
+            for language in data.languages:
+                conn.execute(text("INSERT INTO users_languages (id, user_id, languages) VALUES (:id, :user_id, :language)"),
+                             {"id": str(uuid.uuid4()), "user_id": user_id, "language": language.lower()})
+        if data.pictures is not None:
+            conn.execute(text("DELETE FROM users_picture WHERE user_id = :id"), {"id": user_id})
+            for picture in data.pictures:
+                conn.execute(text("INSERT INTO users_picture (id, user_id, url) VALUES (:id, :user_id, :url)"),
+                             {"id": str(uuid.uuid4()), "user_id": user_id, "url": picture})
+    return {"message": "Usuario modificado correctamente."}
 
-        return {"message": "Usuario modificado correctamente."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
 
-    
-    
 @router.get("/users", tags=["Auth & Users"])
 async def get_all_users():
     try:
@@ -289,11 +228,6 @@ async def get_all_users():
                     text("SELECT languages FROM users_languages WHERE user_id = :id"), {"id": uid}
                 ).fetchall()
                 u_dict["languages"] = [row.languages for row in languages]
-                
-                opinions = conn.execute(
-                    text("SELECT opinions FROM users_opinions WHERE user_id = :id"), {"id": uid}
-                ).fetchall()
-                u_dict["opinions"] = [row.opinions for row in opinions]
                 
                 pictures = conn.execute(
                     text("SELECT id, url FROM users_picture WHERE user_id = :id"), {"id": uid}
@@ -317,18 +251,13 @@ async def get_users(id: str = None):
                     raise HTTPException(status_code=404, detail="Usuario no encontrado.")
                 
                 user_dict = dict(user._mapping)
-                user_dict["password"] = user_dict.pop("password_hash", None)
+                user_dict.pop("password_hash", None)
                 
                 # Obtener relaciones 1:N
                 languages = conn.execute(
                     text("SELECT languages FROM users_languages WHERE user_id = :id"), {"id": id}
                 ).fetchall()
                 user_dict["languages"] = [row.languages for row in languages]
-                
-                opinions = conn.execute(
-                    text("SELECT opinions FROM users_opinions WHERE user_id = :id"), {"id": id}
-                ).fetchall()
-                user_dict["opinions"] = [row.opinions for row in opinions]
                 
                 pictures = conn.execute(
                     text("SELECT id, url FROM users_picture WHERE user_id = :id"), {"id": id}
@@ -349,11 +278,6 @@ async def get_users(id: str = None):
                         text("SELECT languages FROM users_languages WHERE user_id = :id"), {"id": uid}
                     ).fetchall()
                     u_dict["languages"] = [row.languages for row in languages]
-                    
-                    opinions = conn.execute(
-                        text("SELECT opinions FROM users_opinions WHERE user_id = :id"), {"id": uid}
-                    ).fetchall()
-                    u_dict["opinions"] = [row.opinions for row in opinions]
                     
                     pictures = conn.execute(
                         text("SELECT id, url FROM users_picture WHERE user_id = :id"), {"id": uid}
@@ -430,7 +354,6 @@ async def delete_user(user_id: str):
                 )
 
             conn.execute(text("DELETE FROM users_languages WHERE user_id = :id"), {"id": user_id})
-            conn.execute(text("DELETE FROM users_opinions WHERE user_id = :id"), {"id": user_id})
             conn.execute(text("DELETE FROM users_picture WHERE user_id = :id"), {"id": user_id})
             result = conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
             if result.rowcount == 0:
@@ -463,7 +386,9 @@ async def delete_user(user_id: str):
         }
     }
 )
-async def update_user_images(user_id: str, request: Request):
+async def update_user_images(user_id: str, request: Request, current_user: str = Depends(get_current_user)):
+    if current_user != user_id:
+        raise HTTPException(403, "No podés modificar imágenes de otro usuario.")
     try:
         form = await request.form()
         images: List[UploadFile] = form.getlist("images")  # type: ignore
@@ -491,7 +416,9 @@ async def update_user_images(user_id: str, request: Request):
 
 
 @router.delete("/users/{user_id}/images/{image_id}", tags=["Auth & Users"])
-async def delete_user_picture(user_id: str, image_id: str):
+async def delete_user_picture(user_id: str, image_id: str, current_user: str = Depends(get_current_user)):
+    if current_user != user_id:
+        raise HTTPException(403, "No podés eliminar imágenes de otro usuario.")
     try:
         with engine.begin() as conn:
             row = conn.execute(
