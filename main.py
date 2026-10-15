@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import guest, admin, auth, bookings, favorites, quintas, reviews, wallet
+from routers import owner, guest, admin, auth, bookings, favorites, quintas, reviews, wallet
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from fastapi.staticfiles import StaticFiles
@@ -42,3 +42,5 @@ app.include_router(favorites.router)
 app.include_router(reviews.router)
 
 app.include_router(guest.router)
+
+app.include_router(owner.router)
