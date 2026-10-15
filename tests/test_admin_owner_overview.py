@@ -53,7 +53,14 @@ def overview(monkeypatch):
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE reviews (id TEXT PRIMARY KEY, booking_id TEXT, stars INTEGER, review_text TEXT, created_at TEXT, recipient_id TEXT, direction TEXT, moderation_status TEXT, reveal_at TEXT)"))
         conn.execute(text("INSERT INTO reviews VALUES ('own-review', '3', 5, 'Great', '2026-01-01', 'owner', 'guest_to_owner', 'visible', '2026-01-01'), ('foreign-review', 'foreign', 2, 'Other', '2026-01-01', 'other', 'guest_to_owner', 'visible', '2026-01-01')"))
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE reviews ADD COLUMN author_id TEXT"))
+        conn.execute(text("ALTER TABLE bookings ADD COLUMN check_out TEXT"))
+    owner_spec = importlib.util.spec_from_file_location("owner_under_test", root / "routers/owner.py")
+    owner_api = importlib.util.module_from_spec(owner_spec)
+    owner_spec.loader.exec_module(owner_api)
     app = FastAPI()
+    app.include_router(owner_api.router)
     app.include_router(api.router)
     with TestClient(app) as client:
         yield client, app, api
@@ -101,3 +108,56 @@ def test_missing_client_and_empty_client(overview):
     data = client.get("/admin/owners/admin/overview").json()
     assert data["properties"] == data["bookings"] == data["payments"] == data["transactions"] == []
     assert data["balances"]["retenido"] == {"ARS": 0, "USD": 0}
+
+
+def test_owner_endpoint_requires_authentication(overview):
+    client, _, _ = overview
+    assert client.get("/owner/overview").status_code == 401
+
+
+def test_owner_cannot_select_another_account(overview):
+    client, app, api = overview
+    app.dependency_overrides[api.get_current_user] = lambda: "owner"
+    response = client.get("/owner/overview?owner_id=other&user_id=other")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["owner"]["id"] == "owner"
+    assert [p["id"] for p in data["properties"]] == ["owner"]
+    assert all(b["owner_id"] == "owner" for b in data["bookings"])
+    assert [p["booking_id"] for p in data["payments"]] == ["0"]
+    assert data["balances"]["disponible"] == {"ARS": 0, "USD": 50}
+    assert [r["id"] for r in data["reviews"]] == ["own-review"]
+    assert "password_hash" not in data["owner"]
+    assert client.get("/owner/other/overview").status_code == 404
+
+
+def test_owner_endpoint_allows_accounts_without_properties(overview):
+    client, app, api = overview
+    app.dependency_overrides[api.get_current_user] = lambda: "empty"
+    with api.engine.begin() as conn:
+        conn.execute(text("INSERT INTO users (id, role) VALUES ('empty', 'user')"))
+    response = client.get("/owner/overview")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["properties"] == data["bookings"] == data["payments"] == data["transactions"] == data["reviews"] == []
+    app.dependency_overrides[api.get_current_user] = lambda: "deleted"
+    assert client.get("/owner/overview").status_code == 404
+
+
+def test_owner_review_visibility_and_eligibility(overview, monkeypatch):
+    from datetime import datetime
+    import services.owner_overview as service
+    monkeypatch.setattr(service, "utc_now", lambda: datetime(2026, 10, 14, 12))
+    client, app, api = overview
+    app.dependency_overrides[api.get_current_user] = lambda: "owner"
+    with api.engine.begin() as conn:
+        conn.execute(text("UPDATE bookings SET check_out='2026-10-12' WHERE id='3'"))
+        conn.execute(text("UPDATE reviews SET reveal_at='2026-10-20' WHERE id='own-review'"))
+    data = client.get("/owner/overview").json()
+    assert data["reviews"] == []
+    assert data["owner"]["average_opinions"] is None
+    assert [b["id"] for b in data["bookings"] if b["can_review"]] == ["3"]
+    with api.engine.begin() as conn:
+        conn.execute(text("INSERT INTO reviews (id, booking_id, author_id, direction) VALUES ('written', '3', 'owner', 'owner_to_guest')"))
+    data = client.get("/owner/overview").json()
+    assert not any(b["can_review"] for b in data["bookings"])
