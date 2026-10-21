@@ -5,7 +5,7 @@ from utils.security import create_access_token, get_current_user
 from models.users import UserRegister, UserUpdate
 from Database.getConnection import engine
 from sqlalchemy import text
-from passlib.context import CryptContext
+from utils.passwords import hash_password, password_context, verify_password
 from PIL import Image
 from urllib.parse import urlparse
 import uuid
@@ -56,9 +56,6 @@ def save_user_image_to_disk(upload_file: UploadFile) -> str:
     return f"{DOMAIN_URL}/{fname}"
 
 
-# Setup Passlib for secure hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 def ensure_users_table_has_password():
     """Valida y emparcha la tabla users original del cliente agregando el campo faltante"""
     try:
@@ -84,7 +81,7 @@ class LoginData(BaseModel):
 async def register_user(data: UserRegister):
     try:
         user_id = str(uuid.uuid4())
-        hashed_pw = pwd_context.hash(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'))
+        hashed_pw = hash_password(data.password)
 
         with engine.begin() as conn:
             # Prevenir duplicados
@@ -146,10 +143,16 @@ async def login(data: LoginData, response: Response):
             if not user or not user.password_hash:
                 raise HTTPException(status_code=401, detail="Credenciales incorrectas o usuario no existe.")
                 
-            is_hashed = user.password_hash.startswith("$2b$") or user.password_hash.startswith("$2a$")
-            if is_hashed:
-                if not pwd_context.verify(data.password.encode('utf-8')[:72].decode('utf-8', 'ignore'), user.password_hash):
+            scheme = password_context.identify(user.password_hash)
+            if scheme:
+                valid, needs_rehash = verify_password(data.password, user.password_hash)
+                if not valid:
                     raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
+                if needs_rehash:
+                    conn.execute(
+                        text("UPDATE users SET password_hash = :pw WHERE id = :id"),
+                        {"pw": hash_password(data.password), "id": user.id},
+                    )
             else:
                 if data.password != user.password_hash:
                     raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
@@ -197,7 +200,7 @@ async def update_user(user_id: str, data: UserUpdate, current_user: str = Depend
                     WHERE user_id=:id AND status IN ('pending', 'leased')
                 """), {"id": user_id})
         if data.password:
-            hashed = pwd_context.hash(data.password.encode("utf-8")[:72].decode("utf-8", "ignore"))
+            hashed = hash_password(data.password)
             conn.execute(text("UPDATE users SET password_hash = :pw WHERE id = :id"), {"pw": hashed, "id": user_id})
         if data.languages is not None:
             conn.execute(text("DELETE FROM users_languages WHERE user_id = :id"), {"id": user_id})
