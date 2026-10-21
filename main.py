@@ -3,13 +3,14 @@ from routers import owner, guest, admin, auth, bookings, favorites, quintas, rev
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from fastapi.staticfiles import StaticFiles
+from utils.request_logging import RequestLogMiddleware
 
 app = FastAPI(root_path="/MdpuF8KsXiRArNlHtl6pXO2XyLSJMTQ8_Zonaquintas/api")
 
 origins = [
     "http://localhost",
     "http://localhost:3009",
-    "http://localhost:3000",
+    "http://localhost:3001",
     "https://zonaquintas.com",
     "https://zonaquintas-website.vercel.app",
     "https://www.zonaquintas.com",
@@ -24,6 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Set-Cookie"],
 )
+app.add_middleware(RequestLogMiddleware)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGES_DIR = os.path.join(BASE_DIR, "images")
