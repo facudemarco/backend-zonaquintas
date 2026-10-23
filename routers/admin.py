@@ -27,6 +27,62 @@ def require_admin(user_id: str = Depends(get_current_user)) -> str:
     return user_id
 
 
+@router.get("/request-logs")
+async def admin_request_logs(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    status_group: Optional[str] = Query(default=None, pattern="^(2xx|3xx|4xx|5xx)$"),
+    method: Optional[str] = Query(default=None, min_length=3, max_length=10),
+    search: Optional[str] = Query(default=None, max_length=200),
+    _: str = Depends(require_admin),
+):
+    clauses = []
+    params = {"limit": limit, "offset": offset}
+    if status_group:
+        first_digit = int(status_group[0])
+        clauses.append("status_code >= :status_min AND status_code < :status_max")
+        params["status_min"] = first_digit * 100
+        params["status_max"] = (first_digit + 1) * 100
+    if method:
+        clauses.append("method = :method")
+        params["method"] = method.upper()
+    if search:
+        clauses.append("(path LIKE :search OR query_string LIKE :search)")
+        params["search"] = f"%{search}%"
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+
+    try:
+        with engine.connect() as conn:
+            total = conn.execute(text(f"SELECT COUNT(*) FROM request_logs{where}"), params).scalar() or 0
+            rows = conn.execute(text(f"""
+                SELECT id, method, path, query_string, status_code, duration_ms,
+                       request_bytes, response_bytes, created_at
+                FROM request_logs{where}
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+            """), params).mappings().all()
+    except Exception:
+        raise HTTPException(503, "Los logs todavía no están disponibles. Aplicá la migración 004_request_logs.up.sql.")
+
+    return {"items": [dict(row) for row in rows], "total": int(total), "limit": limit, "offset": offset}
+
+
+@router.get("/request-logs/{log_id}")
+async def admin_request_log_detail(log_id: str, _: str = Depends(require_admin)):
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("""
+                SELECT id, method, path, query_string, status_code, duration_ms,
+                       request_bytes, response_bytes, request_body, response_body, created_at
+                FROM request_logs WHERE id = :id
+            """), {"id": log_id}).mappings().first()
+    except Exception:
+        raise HTTPException(503, "Los logs todavía no están disponibles. Aplicá la migración 004_request_logs.up.sql.")
+    if not row:
+        raise HTTPException(404, "Petición no encontrada.")
+    return dict(row)
+
+
 @router.get("/owners/{owner_id}/overview")
 async def owner_overview(owner_id: str, _: str = Depends(require_admin)):
     return build_owner_overview(engine, owner_id)
